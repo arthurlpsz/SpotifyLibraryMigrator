@@ -110,10 +110,16 @@ def split_artists(artist_str):
 
 def match_year(sheet_date, spotify_date):
     try:
-        year = str(sheet_date)[:4]
-        return year in spotify_date
+        sheet_text = str(sheet_date).strip()
+        spotify_text = str(spotify_date).strip()
+        sheet_match = re.search(r"\b(?:19|20)\d{2}\b", sheet_text)
+        spotify_match = re.search(r"\b(?:19|20)\d{2}\b", spotify_text)
+        if not sheet_match or not spotify_match:
+            return False
+        return sheet_match.group() == spotify_match.group()
     except:
         return False
+
 
 def match_date(sheet_date, spotify_date):
     try:
@@ -280,7 +286,7 @@ def score_result(row, result):
     )
 
     if track_name == wanted_name:
-        score += 40
+        score += 60
 
     score += similarity * 40
 
@@ -324,32 +330,32 @@ def score_result(row, result):
     else:
         score -= 100
 
-    # explicit ganha prioridade
+    # Explicit funciona apenas como preferência secundária
     if result.get(
         "explicit",
         False
     ):
 
-        score += 50
+        score += 10
 
-    else:
-
-        score -= 30
-
-    # datas
+    # datas: nome/data são sinais principais para identificar a gravação correta
     if match_date(
         row["ESTREIA"],
         result["album"]["release_date"]
     ):
 
-        score += 30
+        score += 50
 
     elif match_year(
         row["ESTREIA"],
         result["album"]["release_date"]
     ):
 
-        score += 15
+        score += 30
+
+    else:
+
+        score -= 50
 
     # tipo de álbum
     album_type = result["album"].get(
@@ -458,27 +464,17 @@ def choose_best_album(row, results):
 
 def choose_best(row, results):
 
-    explicit_results = [
-        r for r in results
-        if r.get("explicit", False)
-    ]
-
-    if explicit_results:
-        results = explicit_results
-
     best = None
     best_score = float("-inf")
 
     for r in results:
-
         score = score_result(row, r)
-
         if score > best_score:
-
             best_score = score
             best = r
 
     return best, best_score
+
 
 def process_row(row):
 

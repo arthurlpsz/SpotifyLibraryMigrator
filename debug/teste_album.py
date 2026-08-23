@@ -1,16 +1,66 @@
-import pandas as pd
 import sys
 from pathlib import Path
+import pandas as pd
 
-sys.path.append(str(Path(__file__).resolve().parent.parent))
+# Permite importar o main.py que está uma pasta acima da pasta debug
+sys.path.append(
+    str(Path(__file__).resolve().parent.parent)
+)
 
 from main import (
     search_album,
-    choose_best_album,
-    score_album_result
+    score_album_result,
+    spotify_call,
+    sp
 )
 
+
+def count_explicit_tracks(album_id):
+    """
+    Conta quantas faixas explicit existem em um álbum.
+    Esta função fica somente no teste por enquanto,
+    sem necessidade de alterar o main.py.
+    """
+
+    explicit_count = 0
+    total = 0
+    offset = 0
+
+    while True:
+
+        results = spotify_call(
+            sp.album_tracks,
+            album_id,
+            limit=50,
+            offset=offset
+        )
+
+        tracks = results.get("items", [])
+
+        if not tracks:
+            break
+
+        total += len(tracks)
+
+        explicit_count += sum(
+            1
+            for track in tracks
+            if track.get("explicit", False)
+        )
+
+        if len(tracks) < 50:
+            break
+
+        offset += 50
+
+    return explicit_count, total
+
+
 def main():
+
+    print("=" * 60)
+    print("TESTE DE ÁLBUM")
+    print("=" * 60)
 
     nome = input("Nome do álbum: ").strip()
     artista = input("Artista: ").strip()
@@ -26,9 +76,9 @@ def main():
         "QTD": int(qtd) if qtd else None
     })
 
-    print("\n==============================")
+    print("\n" + "=" * 60)
     print("BUSCANDO NO SPOTIFY")
-    print("==============================")
+    print("=" * 60)
 
     resultados = search_album(
         nome,
@@ -36,53 +86,137 @@ def main():
         tipo
     )
 
-    print(resultados)
-
     if not resultados:
-        print("Nenhum álbum encontrado.")
+        print("\nNenhum álbum encontrado.")
         return
 
-    print(f"\n{len(resultados)} resultado(s) encontrado(s).\n")
-
-    melhor = choose_best_album(
-        row,
-        resultados
+    print(
+        f"\n{len(resultados)} resultado(s) encontrado(s).\n"
     )
 
-    for i, album in enumerate(resultados, start=1):
+    scored = []
+
+    for album in resultados:
 
         score = score_album_result(
             row,
             album
         )
 
+        scored.append(
+            (album, score)
+        )
+
+    # Ordena apenas para exibição.
+    scored.sort(
+        key=lambda item: item[1],
+        reverse=True
+    )
+
+    best_score = scored[0][1]
+
+    empatados = [
+        album
+        for album, score in scored
+        if score == best_score
+    ]
+
+    explicit_info = {}
+
+    # Só faz chamadas extras quando há empate no melhor score.
+    if len(empatados) > 1:
+
+        print(
+            f"Empate entre {len(empatados)} álbuns "
+            f"com score {best_score}."
+        )
+
+        print(
+            "Verificando quantidade de faixas explicit...\n"
+        )
+
+        for album in empatados:
+
+            explicit_count, total = count_explicit_tracks(
+                album["id"]
+            )
+
+            explicit_info[album["id"]] = (
+                explicit_count,
+                total
+            )
+
+    # Decide o vencedor.
+    if len(empatados) == 1:
+
+        melhor = empatados[0]
+
+    else:
+
+        # Prefere a edição com mais faixas explicit.
+        # Em novo empate, mantém o primeiro resultado.
+        melhor = max(
+            empatados,
+            key=lambda album: explicit_info[
+                album["id"]
+            ][0]
+        )
+
+    for i, (album, score) in enumerate(
+        scored,
+        start=1
+    ):
+
         print("=" * 60)
-
         print(f"Resultado #{i}")
+        print()
 
-        print("Nome........:", album["name"])
+        print(
+            "Nome........:",
+            album.get("name", "")
+        )
 
         print(
             "Artista.....:",
             ", ".join(
                 a["name"]
-                for a in album["artists"]
+                for a in album.get(
+                    "artists",
+                    []
+                )
             )
         )
 
         print(
             "Data........:",
-            album["release_date"]
+            album.get(
+                "release_date",
+                ""
+            )
+        )
+
+        print(
+            "Precisão....:",
+            album.get(
+                "release_date_precision",
+                ""
+            )
         )
 
         print(
             "Tipo........:",
-            album["album_type"]
+            album.get(
+                "album_type",
+                ""
+            )
         )
 
         print(
             "Faixas......:",
-            album["total_tracks"]
+            album.get(
+                "total_tracks",
+                ""
+            )
         )
 
         print(
@@ -90,10 +224,87 @@ def main():
             score
         )
 
-        if melhor and album["id"] == melhor["id"]:
-            print("⭐ ESCOLHIDO PELO ALGORITMO")
+        print(
+            "ID..........:",
+            album.get(
+                "id",
+                ""
+            )
+        )
+
+        if album["id"] in explicit_info:
+
+            explicit_count, total = explicit_info[
+                album["id"]
+            ]
+
+            print(
+                "Explicit....:",
+                f"{explicit_count}/{total}"
+            )
+
+            if explicit_count == 0:
+
+                print(
+                    "Versão......: provável CLEAN"
+                )
+
+            else:
+
+                print(
+                    "Versão......: possui faixas EXPLICIT"
+                )
+
+        if (
+            melhor
+            and album["id"] == melhor["id"]
+        ):
+
+            print()
+            print(
+                "⭐ ESCOLHIDO PELO ALGORITMO"
+            )
 
     print("=" * 60)
+
+    if melhor:
+
+        print("\nRESULTADO FINAL")
+        print("-" * 60)
+
+        print(
+            "Planilha....:",
+            nome,
+            "-",
+            artista
+        )
+
+        print(
+            "Spotify.....:",
+            melhor["name"],
+            "-",
+            ", ".join(
+                a["name"]
+                for a in melhor["artists"]
+            )
+        )
+
+        print(
+            "ID..........:",
+            melhor["id"]
+        )
+
+        if melhor["id"] in explicit_info:
+
+            explicit_count, total = explicit_info[
+                melhor["id"]
+            ]
+
+            print(
+                "Explicit....:",
+                f"{explicit_count}/{total}"
+            )
+
 
 if __name__ == "__main__":
     main()

@@ -450,17 +450,90 @@ def score_album_result(row, album):
 
     return score
 
+def count_explicit_tracks(album_id):
+    """Conta faixas explicit; usada apenas no desempate de álbuns."""
+    explicit_count = 0
+    total = 0
+    offset = 0
+
+    while True:
+        results = spotify_call(
+            sp.album_tracks,
+            album_id,
+            limit=50,
+            offset=offset
+        )
+        tracks = results.get("items", [])
+
+        if not tracks:
+            break
+
+        total += len(tracks)
+        explicit_count += sum(
+            1 for track in tracks
+            if track.get("explicit", False)
+        )
+
+        if len(tracks) < 50:
+            break
+
+        offset += 50
+
+    return explicit_count, total
+
+
 def choose_best_album(row, results):
-    best = None
-    best_score = 0
+
+    if not results:
+        return None
+
+    scored = []
 
     for album in results:
-        s = score_album_result(row, album)
-        if s > best_score:
-            best_score = s
-            best = album
+        score = score_album_result(row, album)
+        scored.append((album, score))
 
-    return best
+    best_score = max(score for _, score in scored)
+
+    tied = [
+        album
+        for album, score in scored
+        if score == best_score
+    ]
+
+    # Sem empate: não faz chamadas extras à API.
+    if len(tied) == 1:
+        return tied[0]
+
+    print(
+        f"Empate entre {len(tied)} álbuns. "
+        "Verificando versões explicit..."
+    )
+
+    explicit_info = {}
+
+    for album in tied:
+        explicit_count, total = count_explicit_tracks(
+            album["id"]
+        )
+
+        explicit_info[album["id"]] = (
+            explicit_count,
+            total
+        )
+
+        print(
+            f"{album['name']} [{album['id']}] "
+            f"-> {explicit_count}/{total} explicit"
+        )
+
+    # Prefere mais faixas explicit.
+    # Persistindo empate, mantém o primeiro resultado.
+    return max(
+        tied,
+        key=lambda album: explicit_info[album["id"]][0]
+    )
+
 
 def choose_best(row, results):
 

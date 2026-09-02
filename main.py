@@ -137,74 +137,85 @@ def match_date(sheet_date, spotify_date):
 
 def search_spotify(track, artist, allow_compilation=False):
 
-    query = f'track:"{track}" artist:"{artist}"'.strip()
-    cache_key = f"{query}|allow_compilation={allow_compilation}"
+    def execute_search(title):
 
-    if cache_key in search_cache:
-        return search_cache[cache_key]
+        query = (
+            f"track:{title} "
+            f"artist:{artist}"
+        ).lower().strip()
 
-    results = spotify_call(
-        sp.search,
-        q=query,
-        type="track",
-        limit=50
-    )
+        cache_key = (
+            f"{query}|allow_compilation="
+            f"{allow_compilation}"
+        )
 
-    items = results["tracks"]["items"]
+        if cache_key in search_cache:
+            return search_cache[cache_key]
 
-    if not allow_compilation:
-        items = [
-            t for t in items
-            if t["album"].get("album_type", "") != "compilation"
-        ]
+        results = spotify_call(
+            sp.search,
+            q=query,
+            type="track",
+            limit=25
+        )
 
-    wanted = track.lower()
+        items = results["tracks"]["items"]
 
-    blocked_versions = [
+        if allow_compilation:
 
-        "remix",
-        "nightcore",
-        "sped up",
-        "slowed",
-        "instrumental",
-        "karaoke",
-        "bootleg",
-        "mashup",
-        "rework",
-        "demo",
-        "commentary",
-        "music video",
-        "official video",
-        "official music video",
-        "visualizer"
+            filtered = items
 
-    ]
+        else:
 
-    filtered = []
+            filtered = [
+                t
+                for t in items
+                if t["album"].get(
+                    "album_type",
+                    ""
+                ) != "compilation"
+            ]
 
-    for item in items:
+        search_cache[cache_key] = filtered
 
-        name = item["name"].lower()
+        return filtered
 
-        if "live" in name and "live" not in wanted:
-            continue
+    # 1. Primeiro tenta exatamente o título da planilha.
+    filtered = execute_search(track)
 
-        ignore = False
+    if filtered:
+        return filtered
 
-        for version in blocked_versions:
+    # 2. Se não encontrou, tenta remover complementos
+    # de trilha sonora, por exemplo:
+    #
+    # Double Life - From "Despicable Me 4"
+    # Double Life (From "Despicable Me 4")
+    # Double Life - From the Movie
+    #
+    # A busca simplificada só acontece quando a original falhou.
 
-            if version in name and version not in wanted:
-                ignore = True
-                break
+    simplified = re.sub(
+        r"\s*[-–—]?\s*\(?\s*from\b.*$",
+        "",
+        str(track),
+        flags=re.IGNORECASE
+    ).strip()
 
-        if ignore:
-            continue
+    if (
+        simplified
+        and simplified.lower() != str(track).lower().strip()
+    ):
 
-        filtered.append(item)
+        print(
+            f"Busca simplificada: "
+            f"'{track}' -> '{simplified}'"
+        )
 
-    search_cache[cache_key] = filtered
+        return execute_search(simplified)
 
     return filtered
+
 
 def score_result(row, result):
 

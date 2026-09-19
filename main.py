@@ -224,12 +224,14 @@ def score_result(row, result):
     track_name = (
         result.get("name", "")
         .lower()
+        .strip()
     )
 
     album_name = (
         result.get("album", {})
         .get("name", "")
         .lower()
+        .strip()
     )
 
     artist_names = " ".join([
@@ -250,14 +252,46 @@ def score_result(row, result):
 
     wanted_name = str(
         row["NOME"]
-    ).lower()
+    ).lower().strip()
 
-    # só bloqueia remix se a planilha não pediu remix
-    if (
-        "remix" in combined
-        and
-        "remix" not in wanted_name
-    ):
+    # ---------------------------------------------------------
+    # REMIX
+    # ---------------------------------------------------------
+    # Só aceita remix quando a própria planilha pede remix.
+    wanted_remix = "remix" in wanted_name
+    result_is_remix = "remix" in combined
+
+    if result_is_remix and not wanted_remix:
+        return -1000
+
+    # Se a planilha pediu remix, evita escolher a versão normal.
+    if wanted_remix and not result_is_remix:
+        return -1000
+
+    # ---------------------------------------------------------
+    # REMASTER / REMASTERED
+    # ---------------------------------------------------------
+    # Antes, "remaster" e "remastered" estavam em blocked_terms,
+    # então QUALQUER versão remasterizada recebia -1000, mesmo
+    # quando a planilha pedia explicitamente essa versão.
+    wanted_remaster = (
+        "remaster" in wanted_name
+        or "remastered" in wanted_name
+    )
+
+    result_is_remaster = (
+        "remaster" in track_name
+        or "remastered" in track_name
+        or "remaster" in album_name
+        or "remastered" in album_name
+    )
+
+    # Se a planilha não pediu remaster, evita versões remasterizadas.
+    if result_is_remaster and not wanted_remaster:
+        return -1000
+
+    # Se a planilha pediu remaster, não deixa uma versão normal vencer.
+    if wanted_remaster and not result_is_remaster:
         return -1000
 
     blocked_terms = [
@@ -266,21 +300,13 @@ def score_result(row, result):
         "music video",
         "official video",
         "official music video",
-
         "live",
         "ao vivo",
-
         "karaoke",
         "instrumental",
-
         "performance",
         "session",
-
         "commentary",
-
-        "remaster",
-        "remastered",
-
         "acoustic"
     ]
 
@@ -290,21 +316,41 @@ def score_result(row, result):
     ):
         return -1000
 
-    # similaridade do nome
+    # ---------------------------------------------------------
+    # NOME
+    # ---------------------------------------------------------
     similarity = similar(
-        row["NOME"],
-        result["name"]
+        wanted_name,
+        track_name
     )
+
+    # Resultado extremamente diferente não deve disputar só por
+    # artista/data parecidos.
+    if similarity < 0.45:
+        return -1000
 
     if track_name == wanted_name:
         score += 60
 
     score += similarity * 40
 
-    # artistas
+    # Bônus específico quando a planilha realmente pediu remaster.
+    if wanted_remaster and result_is_remaster:
+        score += 35
+
+    # Bônus específico quando a planilha realmente pediu remix.
+    if wanted_remix and result_is_remix:
+        score += 25
+
+    # ---------------------------------------------------------
+    # ARTISTAS
+    # ---------------------------------------------------------
     result_artists = [
         a["name"]
-        for a in result["artists"]
+        for a in result.get(
+            "artists",
+            []
+        )
     ]
 
     sheet_artists = split_artists(
@@ -339,97 +385,176 @@ def score_result(row, result):
         score += 20
 
     else:
-        score -= 100
+        return -1000
 
-    # Explicit funciona apenas como preferência secundária
+    # Explicit é apenas preferência secundária.
     if result.get(
         "explicit",
         False
     ):
-
         score += 10
 
-    # datas: nome/data são sinais principais para identificar a gravação correta
+    # ---------------------------------------------------------
+    # DATA
+    # ---------------------------------------------------------
+    spotify_date = (
+        result.get("album", {})
+        .get("release_date", "")
+    )
+
     if match_date(
         row["ESTREIA"],
-        result["album"]["release_date"]
+        spotify_date
     ):
 
         score += 50
 
     elif match_year(
         row["ESTREIA"],
-        result["album"]["release_date"]
+        spotify_date
     ):
 
         score += 30
 
     else:
-
         score -= 50
 
-    # tipo de álbum
-    album_type = result["album"].get(
-        "album_type",
-        ""
+    # ---------------------------------------------------------
+    # TIPO DO LANÇAMENTO
+    # ---------------------------------------------------------
+    album_type = (
+        result.get("album", {})
+        .get("album_type", "")
     )
 
-    if album_type == "album":
-        score += 20
+    user_wants_single = is_single(
+        row.get("TIPO", "")
+    )
 
-    elif album_type == "single":
-        score -= 10
+    if user_wants_single:
 
-    elif album_type == "compilation":
-        score -= 50
+        if album_type == "single":
+            score += 40
+
+        elif album_type == "album":
+            score -= 10
+
+        elif album_type == "compilation":
+            score -= 50
+
+    else:
+
+        if album_type == "album":
+            score += 20
+
+        elif album_type == "single":
+            score -= 10
+
+        elif album_type == "compilation":
+            score -= 50
 
     return score
+
 
 def score_album_result(row, album):
     score = 0
 
-    if similar(row["NOME"], album["name"]) > 0.8:
+    tipo_planilha = row.get("TIPO", "")
+    user_wants_compilation = is_compilation(tipo_planilha)
+
+    album_type = album.get("album_type", "")
+
+    # Nome do álbum
+    name_similarity = similar(
+        row["NOME"],
+        album["name"]
+    )
+
+    if name_similarity > 0.8:
         score += 40
 
-    album_artists = [a["name"] for a in album["artists"]]
-    sheet_artists = split_artists(row["ARTISTAS/GRUPO"])
+    # Artistas
+    album_artists = [
+        a["name"]
+        for a in album["artists"]
+    ]
 
-    # Check if main artist matches closely
-    main_sheet_artist = sheet_artists[0] if sheet_artists else ""
-    main_album_artist = album_artists[0] if album_artists else ""
-    if similar(main_sheet_artist, main_album_artist) > 0.9:
+    sheet_artists = split_artists(
+        row["ARTISTAS/GRUPO"]
+    )
+
+    main_sheet_artist = (
+        sheet_artists[0]
+        if sheet_artists
+        else ""
+    )
+
+    main_album_artist = (
+        album_artists[0]
+        if album_artists
+        else ""
+    )
+
+    if similar(
+        main_sheet_artist,
+        main_album_artist
+    ) > 0.9:
+
         score += 30
-    elif any(similar(sa, ra) > 0.8 for sa in sheet_artists for ra in album_artists):
-        score += 20  # Lower score for secondary matches
-    else:
-        score -= 50  # Heavy penalty if no artist match
 
-    if match_date(row["ESTREIA"], album["release_date"]):
+    elif any(
+        similar(sa, ra) > 0.8
+        for sa in sheet_artists
+        for ra in album_artists
+    ):
+
+        score += 20
+
+    else:
+        # Em compilações é comum o Spotify usar "Various Artists".
+        if not (
+            user_wants_compilation
+            and album_type == "compilation"
+        ):
+            score -= 50
+
+    # Data
+    if match_date(
+        row["ESTREIA"],
+        album["release_date"]
+    ):
+
         score += 15
-    elif match_year(row["ESTREIA"], album["release_date"]):
+
+    elif match_year(
+        row["ESTREIA"],
+        album["release_date"]
+    ):
+
         score += 10
 
-    # Handle compilations based on user intent
-    album_type = album.get("album_type", "")
-    user_wants_compilation = is_collection(row.get("TIPO", ""))
-
+    # Tipo
     if album_type == "compilation":
+
         if user_wants_compilation:
-            score += 10  # Bonus if user wants compilation
+            score += 30
         else:
-            score -= 20  # Penalty if not
+            score -= 20
+
     elif album_type == "album":
-        score += 10  # Prefer full albums over singles/EPs
+
+        if user_wants_compilation:
+            score -= 10
+        else:
+            score += 10
+
     elif album_type == "single":
-        score -= 20  # Avoid singles when album is expected
+        score -= 20
+
     elif album_type == "ep":
-        score -= 15  # Avoid EPs when album is expected
-    else:
-        score += 0
+        score -= 15
 
-    if user_wants_compilation and album_type != "compilation":
-        score -= 10  # Prefer compilations only when explicitly requested
-
+    # Quantidade de faixas
     expected_tracks = get_expected_track_count(row)
 
     if expected_tracks is not None:
@@ -444,22 +569,19 @@ def score_album_result(row, album):
         )
 
         if difference == 0:
-
             score += 30
 
         elif difference <= 2:
-
             score += 15
 
         elif difference <= 5:
-
             score += 5
 
         else:
-
             score -= 5
 
     return score
+
 
 def count_explicit_tracks(album_id):
     """Conta faixas explicit; usada apenas no desempate de álbuns."""
@@ -552,7 +674,18 @@ def choose_best(row, results):
     best_score = float("-inf")
 
     for r in results:
-        score = score_result(row, r)
+
+        score = score_result(
+            row,
+            r
+        )
+
+        # -1000 significa que o resultado foi rejeitado.
+        # Antes, se TODOS os resultados fossem -1000,
+        # o primeiro deles ainda acabava sendo escolhido.
+        if score <= -1000:
+            continue
+
         if score > best_score:
             best_score = score
             best = r
@@ -570,6 +703,11 @@ def process_row(row):
     ).lower()
 
     if is_collection(tipo):
+
+        if is_compilation(tipo):
+            print(
+                f"BUSCANDO COMPILAÇÃO: {row['NOME']}"
+            )
 
         results = search_album(
             row["NOME"],
@@ -616,6 +754,23 @@ def process_row(row):
         )
 
         if best:
+            print(
+                "Selecionado:",
+                best.get("name", ""),
+                "-",
+                ", ".join(
+                    a.get("name", "")
+                    for a in best.get("artists", [])
+                ),
+                "|",
+                best.get("album", {}).get("name", ""),
+                "|",
+                best.get("album", {}).get("release_date", ""),
+                "|",
+                best.get("album", {}).get("album_type", "")
+            )
+
+        if best:
 
             return (
                 "track",
@@ -633,15 +788,46 @@ def like_track(track_id):
 
     time.sleep(0.2)
     
+def is_single(tipo):
+    if not tipo:
+        return False
+
+    tipo = str(tipo).strip().lower()
+
+    return "single" in tipo
+
+
+def is_compilation(tipo):
+    if not tipo:
+        return False
+
+    tipo = str(tipo).strip().lower()
+
+    return any(
+        x in tipo
+        for x in [
+            "compilacao",
+            "compilação",
+            "coletanea",
+            "coletânea",
+            "compilation"
+        ]
+    )
+
+
 def is_collection(tipo):
     if not tipo:
         return False
 
-    tipo = str(tipo).lower()
+    tipo = str(tipo).strip().lower()
 
-    return any(x in tipo for x in [
-    "album", "álbum", "ep", "compilacao", "coletanea"
-])
+    return (
+        "album" in tipo
+        or "álbum" in tipo
+        or "ep" in tipo
+        or is_compilation(tipo)
+    )
+
 
 def get_artist_id(artist_name):
     cache_key = artist_name.lower().strip()
@@ -676,54 +862,60 @@ def search_album(nome, artista, tipo=""):
     if cache_key in album_search_cache:
         return album_search_cache[cache_key]
 
-    # usar só o artista principal
     main_artist = split_artists(artista)[0]
+    user_wants_compilation = is_compilation(tipo)
 
-    query = (
-        f"album:{nome} "
-        f"artist:{main_artist}"
-    )
+    queries = [
+        f"album:{nome} artist:{main_artist}"
+    ]
+
+    # Compilações frequentemente aparecem como "Various Artists".
+    # Nesses casos também buscamos apenas pelo título.
+    if user_wants_compilation:
+        queries.append(
+            f"album:{nome}"
+        )
 
     try:
 
-        results = spotify_call(
-            sp.search,
-            q=query,
-            type="album",
-            limit=10
-        )
-
-        albums = results["albums"]["items"]
-
-        # remover duplicados (Spotify costuma retornar
-        # deluxe, remaster, versões repetidas etc.)
+        albums = []
         seen = set()
-        filtered = []
 
-        for album in albums:
+        for query in queries:
 
-            album_id = album["id"]
+            results = spotify_call(
+                sp.search,
+                q=query,
+                type="album",
+                limit=20
+            )
 
-            if album_id in seen:
-                continue
+            for album in results["albums"]["items"]:
 
-            seen.add(album_id)
+                album_id = album["id"]
 
-            album_name = album["name"].lower()
+                if album_id in seen:
+                    continue
 
-            # remover algumas versões ruins
-            if any(x in album_name for x in [
-                "karaoke",
-                "instrumental",
-                "commentary"
-            ]):
-                continue
+                seen.add(album_id)
 
-            filtered.append(album)
+                album_name = album["name"].lower()
 
-        album_search_cache[cache_key] = filtered
+                if any(
+                    x in album_name
+                    for x in [
+                        "karaoke",
+                        "instrumental",
+                        "commentary"
+                    ]
+                ):
+                    continue
 
-        return filtered
+                albums.append(album)
+
+        album_search_cache[cache_key] = albums
+
+        return albums
 
     except Exception as e:
 
@@ -735,10 +927,71 @@ def search_album(nome, artista, tipo=""):
 
         return []
 
-def add_album(album_id):
+
+def parse_discs(value):
+    """
+    Interpreta a coluna DISCO da planilha.
+
+    Exemplos aceitos:
+      vazio / NaN -> None (todos os discos)
+      1           -> {1}
+      2           -> {2}
+      1,2         -> {1, 2}
+      1.2         -> {1, 2}  # caso o Excel converta 1,2 para decimal
+      1,2,4       -> {1, 2, 4}
+      1.2.4       -> {1, 2, 4}
+    """
+    if value is None or pd.isna(value):
+        return None
+
+    value = str(value).strip()
+
+    if not value:
+        return None
+
+    # Se o Excel leu um único disco como número decimal inteiro:
+    # 1.0 -> 1
+    # 2.0 -> 2
+    if re.fullmatch(r"\d+\.0+", value):
+        value = value.split(".")[0]
+
+    # Aceita vírgula OU ponto como separador.
+    # Isso resolve casos em que o Excel transforma "1,2" em 1.2.
+    parts = re.split(r"[,.]", value)
+
+    discs = set()
+
+    for part in parts:
+        part = part.strip()
+
+        if not part:
+            continue
+
+        if not part.isdigit():
+            raise ValueError(
+                f"Valor inválido na coluna DISCO: '{value}'. "
+                "Use números separados por vírgula, por exemplo: 1 ou 1,2."
+            )
+
+        disc = int(part)
+
+        if disc < 1:
+            raise ValueError(
+                f"Valor inválido na coluna DISCO: '{value}'. "
+                "Os discos devem começar em 1."
+            )
+
+        discs.add(disc)
+
+    return discs if discs else None
+
+
+
+def add_album(album_id, selected_discs=None):
 
     ids = []
     seen_tracks = set()
+    found_discs = set()
 
     offset = 0
 
@@ -751,15 +1004,32 @@ def add_album(album_id):
             offset=offset
         )
 
+        tracks = results.get("items", [])
+
+        if not tracks:
+            break
+
+        # Ordena por disco e, dentro dele, pelo número da faixa.
         tracks = sorted(
-            results.get("items", []),
-            key=lambda t: t.get(
-                "track_number",
-                0
+            tracks,
+            key=lambda t: (
+                t.get("disc_number", 1),
+                t.get("track_number", 0)
             )
         )
 
         for t in tracks:
+
+            disc_number = t.get("disc_number", 1)
+            found_discs.add(disc_number)
+
+            # Se a coluna DISCO estiver preenchida,
+            # ignora qualquer faixa que não pertença aos discos escolhidos.
+            if (
+                selected_discs is not None
+                and disc_number not in selected_discs
+            ):
+                continue
 
             track_id = t.get("id")
 
@@ -776,6 +1046,44 @@ def add_album(album_id):
             break
 
         offset += 50
+
+    # Mostra no terminal o que o código realmente interpretou.
+    print(
+        "Discos encontrados no Spotify:",
+        ", ".join(str(d) for d in sorted(found_discs))
+        if found_discs else "nenhum"
+    )
+
+    if selected_discs is None:
+
+        print(
+            "DISCO na planilha: vazio -> adicionando todos os discos."
+        )
+
+    else:
+
+        print(
+            "DISCO na planilha:",
+            ", ".join(str(d) for d in sorted(selected_discs))
+        )
+
+        missing_discs = selected_discs - found_discs
+
+        if missing_discs:
+            print(
+                "AVISO: disco(s) solicitado(s) não encontrado(s): "
+                + ", ".join(
+                    str(d)
+                    for d in sorted(missing_discs)
+                )
+            )
+
+    if not ids:
+
+        print(
+            "Nenhuma faixa encontrada para o(s) disco(s) selecionado(s)."
+        )
+        return
 
     BATCH_SIZE = 5
 
@@ -795,6 +1103,7 @@ def add_album(album_id):
     )
 
     time.sleep(2)
+
 
 def get_expected_track_count(row):
 
@@ -938,7 +1247,23 @@ def main():
     try:
         for _, row in df.iterrows():
 
-            unique_id = f"{row['NOME']}|{row['ARTISTAS/GRUPO']}"
+            progress_discs = parse_discs(
+                row.get("DISCO")
+            )
+
+            if progress_discs is None:
+                disco_progress = ""
+            else:
+                disco_progress = ",".join(
+                    str(d)
+                    for d in sorted(progress_discs)
+                )
+
+            unique_id = (
+                f"{row['NOME']}|"
+                f"{row['ARTISTAS/GRUPO']}|"
+                f"{disco_progress}"
+            )
 
             if unique_id in processed:
                 pbar.update(1)
@@ -964,8 +1289,13 @@ def main():
                             f"ADICIONANDO ALBUM: {row['NOME']}"
                         )
 
+                        selected_discs = parse_discs(
+                            row.get("DISCO")
+                        )
+
                         add_album(
-                            spotify_id
+                            spotify_id,
+                            selected_discs
                         )
 
                 processed.add(unique_id)

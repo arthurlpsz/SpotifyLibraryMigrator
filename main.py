@@ -2,13 +2,32 @@ import pandas as pd
 from tqdm import tqdm
 import json
 import os
-import time
-import spotipy
-from spotipy.oauth2 import SpotifyOAuth
-from spotipy.exceptions import SpotifyException
-from difflib import SequenceMatcher
-import re
 import atexit
+
+from utils import (
+    similar,
+    split_artists,
+    match_year,
+    match_date,
+    is_single,
+    is_compilation,
+    is_collection,
+    parse_discs,
+)
+
+from spotify_client import (
+    sp,
+    spotify_call,
+    like_track,
+    add_album,
+    delete_all_saved_tracks,
+)
+
+from track_matcher import (
+    search_spotify,
+    score_result,
+    choose_best,
+)
 
 PROGRESS_FILE = "progress.json"
 artist_id_cache = {}
@@ -35,61 +54,6 @@ if os.path.exists(CACHE_FILE):
             "album", {}
         )
 
-client_id = os.getenv("SPOTIPY_CLIENT_ID")
-client_secret = os.getenv("SPOTIPY_CLIENT_SECRET")
-redirect_uri = os.getenv("SPOTIPY_REDIRECT_URI", "https://127.0.0.1:8888/callback")
-
-sp = spotipy.Spotify(
-    auth_manager=SpotifyOAuth(
-        client_id=client_id,
-        client_secret=client_secret,
-        redirect_uri=redirect_uri,
-        scope="user-library-read user-library-modify"
-    )
-)
-
-def spotify_call(func, *args, max_retries=5, **kwargs):
-    retries = 0
-
-    while True:
-        try:
-            return func(*args, **kwargs)
-
-        except SpotifyException as e:
-
-            # Rate limit
-            if e.http_status == 429 and retries < max_retries:
-
-                retry_after = int(
-                    e.headers.get("Retry-After", 5)
-                )
-
-                print(
-                    f"Rate limit atingido. Esperando {retry_after}s..."
-                )
-
-                time.sleep(retry_after + 1)
-
-                retries += 1
-                continue
-
-            raise
-
-        except Exception as e:
-
-            if retries < max_retries:
-                retries += 1
-
-                print(
-                    f"Erro temporário: {e}"
-                )
-
-                time.sleep(2)
-
-                continue
-
-            raise
-
 
 def load_progress():
     if os.path.exists(PROGRESS_FILE):
@@ -101,359 +65,14 @@ def save_progress(processed_ids):
     with open(PROGRESS_FILE, "w") as f:
         json.dump({"processed": list(processed_ids)}, f)
 
-def similar(a, b):
-    return SequenceMatcher(None, str(a).lower(), str(b).lower()).ratio()
 
 
-def split_artists(artist_str):
-    return [a.strip() for a in re.split(r',|feat\.|ft\.|with|&', str(artist_str), flags=re.IGNORECASE)]
 
-def match_year(sheet_date, spotify_date):
-    try:
-        sheet_text = str(sheet_date).strip()
-        spotify_text = str(spotify_date).strip()
-        sheet_match = re.search(r"\b(?:19|20)\d{2}\b", sheet_text)
-        spotify_match = re.search(r"\b(?:19|20)\d{2}\b", spotify_text)
-        if not sheet_match or not spotify_match:
-            return False
-        return sheet_match.group() == spotify_match.group()
-    except:
-        return False
 
 
-def match_date(sheet_date, spotify_date):
-    try:
-        # Assume sheet_date is DD/MM/YYYY or DD-MM-YYYY
-        parts = re.split(r'[/-]', str(sheet_date))
-        if len(parts) == 3:
-            day, month, year = parts
-            formatted = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
-            return formatted == spotify_date
-        else:
-            # Fallback to year
-            return str(sheet_date)[:4] in spotify_date
-    except:
-        return False
 
-def search_spotify(track, artist, allow_compilation=False):
 
-    def execute_search(title):
 
-        query = (
-            f"track:{title} "
-            f"artist:{artist}"
-        ).lower().strip()
-
-        cache_key = (
-            f"{query}|allow_compilation="
-            f"{allow_compilation}"
-        )
-
-        if cache_key in search_cache:
-            return search_cache[cache_key]
-
-        results = spotify_call(
-            sp.search,
-            q=query,
-            type="track",
-            limit=25
-        )
-
-        items = results["tracks"]["items"]
-
-        if allow_compilation:
-
-            filtered = items
-
-        else:
-
-            filtered = [
-                t
-                for t in items
-                if t["album"].get(
-                    "album_type",
-                    ""
-                ) != "compilation"
-            ]
-
-        search_cache[cache_key] = filtered
-
-        return filtered
-
-    # 1. Primeiro tenta exatamente o título da planilha.
-    filtered = execute_search(track)
-
-    if filtered:
-        return filtered
-
-    # 2. Se não encontrou, tenta remover complementos
-    # de trilha sonora, por exemplo:
-    #
-    # Double Life - From "Despicable Me 4"
-    # Double Life (From "Despicable Me 4")
-    # Double Life - From the Movie
-    #
-    # A busca simplificada só acontece quando a original falhou.
-
-    simplified = re.sub(
-        r"\s*[-–—]?\s*\(?\s*from\b.*$",
-        "",
-        str(track),
-        flags=re.IGNORECASE
-    ).strip()
-
-    if (
-        simplified
-        and simplified.lower() != str(track).lower().strip()
-    ):
-
-        print(
-            f"Busca simplificada: "
-            f"'{track}' -> '{simplified}'"
-        )
-
-        return execute_search(simplified)
-
-    return filtered
-
-
-def score_result(row, result):
-
-    score = 0
-
-    track_name = (
-        result.get("name", "")
-        .lower()
-        .strip()
-    )
-
-    album_name = (
-        result.get("album", {})
-        .get("name", "")
-        .lower()
-        .strip()
-    )
-
-    artist_names = " ".join([
-        a["name"]
-        for a in result.get(
-            "artists",
-            []
-        )
-    ]).lower()
-
-    combined = (
-        track_name
-        + " "
-        + album_name
-        + " "
-        + artist_names
-    )
-
-    wanted_name = str(
-        row["NOME"]
-    ).lower().strip()
-
-    # ---------------------------------------------------------
-    # REMIX
-    # ---------------------------------------------------------
-    # Só aceita remix quando a própria planilha pede remix.
-    wanted_remix = "remix" in wanted_name
-    result_is_remix = "remix" in combined
-
-    if result_is_remix and not wanted_remix:
-        return -1000
-
-    # Se a planilha pediu remix, evita escolher a versão normal.
-    if wanted_remix and not result_is_remix:
-        return -1000
-
-    # ---------------------------------------------------------
-    # REMASTER / REMASTERED
-    # ---------------------------------------------------------
-    # Antes, "remaster" e "remastered" estavam em blocked_terms,
-    # então QUALQUER versão remasterizada recebia -1000, mesmo
-    # quando a planilha pedia explicitamente essa versão.
-    wanted_remaster = (
-        "remaster" in wanted_name
-        or "remastered" in wanted_name
-    )
-
-    result_is_remaster = (
-        "remaster" in track_name
-        or "remastered" in track_name
-        or "remaster" in album_name
-        or "remastered" in album_name
-    )
-
-    # Se a planilha não pediu remaster, evita versões remasterizadas.
-    if result_is_remaster and not wanted_remaster:
-        return -1000
-
-    # Se a planilha pediu remaster, não deixa uma versão normal vencer.
-    if wanted_remaster and not result_is_remaster:
-        return -1000
-
-    blocked_terms = [
-        "video",
-        "videoclipe",
-        "music video",
-        "official video",
-        "official music video",
-        "live",
-        "ao vivo",
-        "karaoke",
-        "instrumental",
-        "performance",
-        "session",
-        "commentary",
-        "acoustic"
-    ]
-
-    if any(
-        term in combined
-        for term in blocked_terms
-    ):
-        return -1000
-
-    # ---------------------------------------------------------
-    # NOME
-    # ---------------------------------------------------------
-    similarity = similar(
-        wanted_name,
-        track_name
-    )
-
-    # Resultado extremamente diferente não deve disputar só por
-    # artista/data parecidos.
-    if similarity < 0.45:
-        return -1000
-
-    if track_name == wanted_name:
-        score += 60
-
-    score += similarity * 40
-
-    # Bônus específico quando a planilha realmente pediu remaster.
-    if wanted_remaster and result_is_remaster:
-        score += 35
-
-    # Bônus específico quando a planilha realmente pediu remix.
-    if wanted_remix and result_is_remix:
-        score += 25
-
-    # ---------------------------------------------------------
-    # ARTISTAS
-    # ---------------------------------------------------------
-    result_artists = [
-        a["name"]
-        for a in result.get(
-            "artists",
-            []
-        )
-    ]
-
-    sheet_artists = split_artists(
-        row["ARTISTAS/GRUPO"]
-    )
-
-    main_sheet = (
-        sheet_artists[0]
-        if sheet_artists
-        else ""
-    )
-
-    main_result = (
-        result_artists[0]
-        if result_artists
-        else ""
-    )
-
-    if similar(
-        main_sheet,
-        main_result
-    ) > 0.9:
-
-        score += 50
-
-    elif any(
-        similar(sa, ra) > 0.8
-        for sa in sheet_artists
-        for ra in result_artists
-    ):
-
-        score += 20
-
-    else:
-        return -1000
-
-    # Explicit é apenas preferência secundária.
-    if result.get(
-        "explicit",
-        False
-    ):
-        score += 10
-
-    # ---------------------------------------------------------
-    # DATA
-    # ---------------------------------------------------------
-    spotify_date = (
-        result.get("album", {})
-        .get("release_date", "")
-    )
-
-    if match_date(
-        row["ESTREIA"],
-        spotify_date
-    ):
-
-        score += 50
-
-    elif match_year(
-        row["ESTREIA"],
-        spotify_date
-    ):
-
-        score += 30
-
-    else:
-        score -= 50
-
-    # ---------------------------------------------------------
-    # TIPO DO LANÇAMENTO
-    # ---------------------------------------------------------
-    album_type = (
-        result.get("album", {})
-        .get("album_type", "")
-    )
-
-    user_wants_single = is_single(
-        row.get("TIPO", "")
-    )
-
-    if user_wants_single:
-
-        if album_type == "single":
-            score += 40
-
-        elif album_type == "album":
-            score -= 10
-
-        elif album_type == "compilation":
-            score -= 50
-
-    else:
-
-        if album_type == "album":
-            score += 20
-
-        elif album_type == "single":
-            score -= 10
-
-        elif album_type == "compilation":
-            score -= 50
-
-    return score
 
 
 def score_album_result(row, album):
@@ -668,29 +287,6 @@ def choose_best_album(row, results):
     )
 
 
-def choose_best(row, results):
-
-    best = None
-    best_score = float("-inf")
-
-    for r in results:
-
-        score = score_result(
-            row,
-            r
-        )
-
-        # -1000 significa que o resultado foi rejeitado.
-        # Antes, se TODOS os resultados fossem -1000,
-        # o primeiro deles ainda acabava sendo escolhido.
-        if score <= -1000:
-            continue
-
-        if score > best_score:
-            best_score = score
-            best = r
-
-    return best, best_score
 
 
 def process_row(row):
@@ -738,7 +334,8 @@ def process_row(row):
         results = search_spotify(
             row["NOME"],
             row["ARTISTAS/GRUPO"],
-            allow_compilation=False
+            allow_compilation=False,
+            search_cache=search_cache
         )
 
         best, best_score = choose_best(
@@ -779,54 +376,11 @@ def process_row(row):
 
     return None
 
-def like_track(track_id):
-
-    spotify_call(
-        sp.current_user_saved_tracks_add,
-        [track_id]
-    )
-
-    time.sleep(0.2)
     
-def is_single(tipo):
-    if not tipo:
-        return False
-
-    tipo = str(tipo).strip().lower()
-
-    return "single" in tipo
 
 
-def is_compilation(tipo):
-    if not tipo:
-        return False
-
-    tipo = str(tipo).strip().lower()
-
-    return any(
-        x in tipo
-        for x in [
-            "compilacao",
-            "compilação",
-            "coletanea",
-            "coletânea",
-            "compilation"
-        ]
-    )
 
 
-def is_collection(tipo):
-    if not tipo:
-        return False
-
-    tipo = str(tipo).strip().lower()
-
-    return (
-        "album" in tipo
-        or "álbum" in tipo
-        or "ep" in tipo
-        or is_compilation(tipo)
-    )
 
 
 def get_artist_id(artist_name):
@@ -928,181 +482,9 @@ def search_album(nome, artista, tipo=""):
         return []
 
 
-def parse_discs(value):
-    """
-    Interpreta a coluna DISCO da planilha.
-
-    Exemplos aceitos:
-      vazio / NaN -> None (todos os discos)
-      1           -> {1}
-      2           -> {2}
-      1,2         -> {1, 2}
-      1.2         -> {1, 2}  # caso o Excel converta 1,2 para decimal
-      1,2,4       -> {1, 2, 4}
-      1.2.4       -> {1, 2, 4}
-    """
-    if value is None or pd.isna(value):
-        return None
-
-    value = str(value).strip()
-
-    if not value:
-        return None
-
-    # Se o Excel leu um único disco como número decimal inteiro:
-    # 1.0 -> 1
-    # 2.0 -> 2
-    if re.fullmatch(r"\d+\.0+", value):
-        value = value.split(".")[0]
-
-    # Aceita vírgula OU ponto como separador.
-    # Isso resolve casos em que o Excel transforma "1,2" em 1.2.
-    parts = re.split(r"[,.]", value)
-
-    discs = set()
-
-    for part in parts:
-        part = part.strip()
-
-        if not part:
-            continue
-
-        if not part.isdigit():
-            raise ValueError(
-                f"Valor inválido na coluna DISCO: '{value}'. "
-                "Use números separados por vírgula, por exemplo: 1 ou 1,2."
-            )
-
-        disc = int(part)
-
-        if disc < 1:
-            raise ValueError(
-                f"Valor inválido na coluna DISCO: '{value}'. "
-                "Os discos devem começar em 1."
-            )
-
-        discs.add(disc)
-
-    return discs if discs else None
 
 
 
-def add_album(album_id, selected_discs=None):
-
-    ids = []
-    seen_tracks = set()
-    found_discs = set()
-
-    offset = 0
-
-    while True:
-
-        results = spotify_call(
-            sp.album_tracks,
-            album_id,
-            limit=50,
-            offset=offset
-        )
-
-        tracks = results.get("items", [])
-
-        if not tracks:
-            break
-
-        # Ordena por disco e, dentro dele, pelo número da faixa.
-        tracks = sorted(
-            tracks,
-            key=lambda t: (
-                t.get("disc_number", 1),
-                t.get("track_number", 0)
-            )
-        )
-
-        for t in tracks:
-
-            disc_number = t.get("disc_number", 1)
-            found_discs.add(disc_number)
-
-            # Se a coluna DISCO estiver preenchida,
-            # ignora qualquer faixa que não pertença aos discos escolhidos.
-            if (
-                selected_discs is not None
-                and disc_number not in selected_discs
-            ):
-                continue
-
-            track_id = t.get("id")
-
-            if not track_id:
-                continue
-
-            if track_id in seen_tracks:
-                continue
-
-            seen_tracks.add(track_id)
-            ids.append(track_id)
-
-        if len(tracks) < 50:
-            break
-
-        offset += 50
-
-    # Mostra no terminal o que o código realmente interpretou.
-    print(
-        "Discos encontrados no Spotify:",
-        ", ".join(str(d) for d in sorted(found_discs))
-        if found_discs else "nenhum"
-    )
-
-    if selected_discs is None:
-
-        print(
-            "DISCO na planilha: vazio -> adicionando todos os discos."
-        )
-
-    else:
-
-        print(
-            "DISCO na planilha:",
-            ", ".join(str(d) for d in sorted(selected_discs))
-        )
-
-        missing_discs = selected_discs - found_discs
-
-        if missing_discs:
-            print(
-                "AVISO: disco(s) solicitado(s) não encontrado(s): "
-                + ", ".join(
-                    str(d)
-                    for d in sorted(missing_discs)
-                )
-            )
-
-    if not ids:
-
-        print(
-            "Nenhuma faixa encontrada para o(s) disco(s) selecionado(s)."
-        )
-        return
-
-    BATCH_SIZE = 5
-
-    for i in range(
-        0,
-        len(ids),
-        BATCH_SIZE
-    ):
-
-        spotify_call(
-            sp.current_user_saved_tracks_add,
-            ids[i:i+BATCH_SIZE]
-        )
-
-    print(
-        f"Álbum adicionado ({len(ids)} músicas)"
-    )
-
-    time.sleep(2)
 
 
 def get_expected_track_count(row):
@@ -1144,72 +526,6 @@ def ask_delete_all_tracks():
             return False
         print("Digite 's' para sim ou 'n' para não.")
 
-def delete_all_saved_tracks():
-
-    print("Apagando todas as músicas salvas do Spotify...")
-
-    all_ids = []
-    offset = 0
-
-    while True:
-
-        results = spotify_call(
-            sp.current_user_saved_tracks,
-            limit=50,
-            offset=offset
-        )
-
-        items = results.get("items", [])
-
-        if not items:
-            break
-
-        for item in items:
-
-            track = item.get("track")
-
-            if track and track.get("id"):
-                all_ids.append(
-                    track["id"]
-                )
-
-        offset += len(items)
-
-    if not all_ids:
-
-        print(
-            "Nenhuma música salva encontrada."
-        )
-
-        return
-
-    total = len(all_ids)
-
-    # usar 20 em vez de 50
-    BATCH_SIZE = 20
-
-    for i in range(
-        0,
-        total,
-        BATCH_SIZE
-    ):
-
-        batch = all_ids[
-            i:i+BATCH_SIZE
-        ]
-
-        spotify_call(
-            sp.current_user_saved_tracks_delete,
-            batch
-        )
-
-        print(
-            f"Removidas {min(i+BATCH_SIZE,total)}/{total}"
-        )
-
-    print(
-        f"{total} músicas removidas com sucesso."
-    )
 
 def save_cache():
 

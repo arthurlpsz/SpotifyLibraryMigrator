@@ -5,7 +5,6 @@ from utils import (
     split_artists,
     match_year,
     match_date,
-    is_single,
 )
 
 from spotify_client import (
@@ -303,43 +302,87 @@ def score_result(row, result):
     # ---------------------------------------------------------
     # TIPO DO LANÇAMENTO
     # ---------------------------------------------------------
+    # A coluna TIPO da planilha identifica que esta linha é uma
+    # música/single, mas isso NÃO significa que a faixa correta
+    # precisa vir de um release do tipo "single".
+    #
+    # Quando a mesma gravação existe dentro de um álbum completo,
+    # a versão do álbum é preferível. Isso evita pegar capas de
+    # singles/EPs promocionais quando a música também faz parte
+    # do álbum do artista.
     album_type = (
         result.get("album", {})
         .get("album_type", "")
     )
 
-    user_wants_single = is_single(
-        row.get("TIPO", "")
-    )
+    if album_type == "album":
+        score += 15
 
-    if user_wants_single:
+    elif album_type == "single":
+        # Continua sendo um candidato válido. Só não recebe o
+        # bônus artificial que antes fazia singles/EPs vencerem.
+        score += 0
 
-        if album_type == "single":
-            score += 40
-
-        elif album_type == "album":
-            score -= 10
-
-        elif album_type == "compilation":
-            score -= 50
-
-    else:
-
-        if album_type == "album":
-            score += 20
-
-        elif album_type == "single":
-            score -= 10
-
-        elif album_type == "compilation":
-            score -= 50
+    elif album_type == "compilation":
+        score -= 50
 
     return score
 
+def _same_track_identity(row, result):
+    """
+    Verifica se o resultado parece ser realmente a mesma música
+    antes de aplicar a preferência pela versão presente em álbum.
+    """
+
+    wanted_name = str(
+        row["NOME"]
+    ).lower().strip()
+
+    result_name = str(
+        result.get("name", "")
+    ).lower().strip()
+
+    # Exigimos uma correspondência forte do título.
+    if similar(
+        wanted_name,
+        result_name
+    ) < 0.92:
+        return False
+
+    sheet_artists = split_artists(
+        row["ARTISTAS/GRUPO"]
+    )
+
+    result_artists = [
+        a.get("name", "")
+        for a in result.get(
+            "artists",
+            []
+        )
+    ]
+
+    if not sheet_artists or not result_artists:
+        return False
+
+    main_sheet = sheet_artists[0]
+    main_result = result_artists[0]
+
+    if similar(
+        main_sheet,
+        main_result
+    ) > 0.9:
+        return True
+
+    return any(
+        similar(sa, ra) > 0.8
+        for sa in sheet_artists
+        for ra in result_artists
+    )
+
+
 def choose_best(row, results):
 
-    best = None
-    best_score = float("-inf")
+    valid_results = []
 
     for r in results:
 
@@ -348,15 +391,63 @@ def choose_best(row, results):
             r
         )
 
-        # -1000 significa que o resultado foi rejeitado.
-        # Antes, se TODOS os resultados fossem -1000,
-        # o primeiro deles ainda acabava sendo escolhido.
+        # -1000 significa que o candidato foi rejeitado por nome,
+        # artista, remix/remaster incompatível etc.
         if score <= -1000:
             continue
 
-        if score > best_score:
-            best_score = score
-            best = r
+        valid_results.append(
+            (r, score)
+        )
+
+    if not valid_results:
+        return None, float("-inf")
+
+    # ---------------------------------------------------------
+    # PREFERÊNCIA POR FAIXA DO ÁLBUM
+    # ---------------------------------------------------------
+    # Se a mesma música, do mesmo artista, também aparece em um
+    # álbum completo, priorizamos essa ocorrência.
+    #
+    # Isso evita selecionar releases isolados que usam capas de
+    # single/EP quando a faixa faz parte do álbum oficial.
+    album_versions = [
+        (result, score)
+        for result, score in valid_results
+        if (
+            result.get("album", {}).get(
+                "album_type",
+                ""
+            ) == "album"
+            and _same_track_identity(
+                row,
+                result
+            )
+        )
+    ]
+
+    if album_versions:
+
+        best, best_score = max(
+            album_versions,
+            key=lambda item: item[1]
+        )
+
+        print(
+            "Preferindo versão presente no álbum:",
+            best.get("album", {}).get(
+                "name",
+                ""
+            )
+        )
+
+        return best, best_score
+
+    # Se a música não existir em nenhum álbum compatível,
+    # usa normalmente o melhor single/release encontrado.
+    best, best_score = max(
+        valid_results,
+        key=lambda item: item[1]
+    )
 
     return best, best_score
-

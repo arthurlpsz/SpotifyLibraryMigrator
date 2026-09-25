@@ -1,0 +1,5 @@
+spotify_cache.json
+progress.json
+.env
+__pycache__/
+*.pyc

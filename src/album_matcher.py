@@ -1,4 +1,4 @@
-from utils import (
+from src.utils import (
     similar,
     split_artists,
     match_year,
@@ -6,7 +6,7 @@ from utils import (
     is_compilation,
 )
 
-from spotify_client import (
+from src.spotify_client import (
     sp,
     spotify_call,
 )

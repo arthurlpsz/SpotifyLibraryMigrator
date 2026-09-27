@@ -2,16 +2,24 @@ import sys
 from pathlib import Path
 import pandas as pd
 
-# Permite importar o main.py que está uma pasta acima
-sys.path.append(
-    str(Path(__file__).resolve().parent.parent)
+# Funciona tanto se este arquivo estiver na raiz quanto em uma pasta debug/
+CURRENT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = (
+    CURRENT_DIR.parent
+    if (CURRENT_DIR.parent / "src").is_dir()
+    else CURRENT_DIR
 )
 
-from main import (
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.track_matcher import (
     search_spotify,
     choose_best,
-    score_result
+    score_result,
 )
+
+from src.storage import search_cache
 
 
 def main():
@@ -38,7 +46,8 @@ def main():
     resultados = search_spotify(
         nome,
         artista,
-        allow_compilation=False
+        allow_compilation=False,
+        search_cache=search_cache
     )
 
     if not resultados:

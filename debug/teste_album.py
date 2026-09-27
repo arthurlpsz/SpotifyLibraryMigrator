@@ -2,50 +2,30 @@ import sys
 from pathlib import Path
 import pandas as pd
 
-# Permite importar o main.py que está uma pasta acima da pasta debug
-sys.path.append(
-    str(Path(__file__).resolve().parent.parent)
+# Funciona tanto se este arquivo estiver na raiz quanto em uma pasta debug/
+CURRENT_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = (
+    CURRENT_DIR.parent
+    if (CURRENT_DIR.parent / "src").is_dir()
+    else CURRENT_DIR
 )
 
-from main import (
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from src.album_matcher import (
     search_album,
     score_album_result,
-    spotify_call,
-    sp
+    count_explicit_tracks,
 )
 
+from src.spotify_client import (
+    spotify_call,
+    sp,
+)
 
-def parse_discs(value):
-    """
-    Converte o valor digitado em uma lista de discos.
-    Exemplos:
-      ""      -> None (todos os discos)
-      "1"     -> {1}
-      "1,2"   -> {1, 2}
-      "1,2,4" -> {1, 2, 4}
-    """
-    value = str(value).strip()
-
-    if not value:
-        return None
-
-    discs = set()
-
-    for part in value.split(","):
-        part = part.strip()
-
-        if not part:
-            continue
-
-        if not part.isdigit():
-            raise ValueError(
-                f"Valor inválido em DISCO: '{part}'. "
-                "Use apenas números separados por vírgula, ex.: 1,2"
-            )
-
-        discs.add(int(part))
-
-    return discs if discs else None
+from src.storage import album_search_cache
+from src.utils import parse_discs
 
 
 def get_album_tracks(album_id):
@@ -76,22 +56,6 @@ def get_album_tracks(album_id):
         offset += 50
 
     return all_tracks
-
-
-def count_explicit_tracks(album_id):
-    """
-    Conta quantas faixas explicit existem em um álbum.
-    Usada somente no desempate entre edições do mesmo álbum.
-    """
-    tracks = get_album_tracks(album_id)
-
-    explicit_count = sum(
-        1
-        for track in tracks
-        if track.get("explicit", False)
-    )
-
-    return explicit_count, len(tracks)
 
 
 def filter_tracks_by_disc(tracks, selected_discs):
@@ -168,7 +132,8 @@ def main():
     resultados = search_album(
         nome,
         artista,
-        tipo
+        tipo,
+        album_search_cache=album_search_cache
     )
 
     if not resultados:

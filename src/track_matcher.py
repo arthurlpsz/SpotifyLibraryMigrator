@@ -151,9 +151,7 @@ def score_result(row, result):
     # ---------------------------------------------------------
     # REMASTER / REMASTERED
     # ---------------------------------------------------------
-    # Antes, "remaster" e "remastered" estavam em blocked_terms,
-    # então QUALQUER versão remasterizada recebia -1000, mesmo
-    # quando a planilha pedia explicitamente essa versão.
+
     wanted_remaster = (
         "remaster" in wanted_name
         or "remastered" in wanted_name
@@ -166,13 +164,11 @@ def score_result(row, result):
         or "remastered" in album_name
     )
 
-    # Se a planilha não pediu remaster, evita versões remasterizadas.
     if result_is_remaster and not wanted_remaster:
-        return -1000
+        return -200
 
-    # Se a planilha pediu remaster, não deixa uma versão normal vencer.
     if wanted_remaster and not result_is_remaster:
-        return -1000
+        return -200
 
     blocked_terms = [
         "video",

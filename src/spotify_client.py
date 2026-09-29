@@ -1,64 +1,233 @@
 import os
 import time
+from getpass import getpass
+from pathlib import Path
+
+import keyring
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from spotipy.exceptions import SpotifyException
 
 
-client_id = os.getenv("SPOTIPY_CLIENT_ID")
-client_secret = os.getenv("SPOTIPY_CLIENT_SECRET")
-redirect_uri = os.getenv("SPOTIPY_REDIRECT_URI", "https://127.0.0.1:8888/callback")
+SERVICE_NAME = "spotify-library-migrator"
+
+TOKEN_DIR = Path.home() / ".spotify-library-migrator"
+TOKEN_CACHE = TOKEN_DIR / "spotify_oauth_cache"
+
+TOKEN_DIR.mkdir(
+    parents=True,
+    exist_ok=True
+)
+
+
+def _clean_value(value):
+    """
+    Remove espaços e aspas colocadas por engano.
+
+    Exemplo:
+        "abc123" -> abc123
+        'abc123' -> abc123
+    """
+
+    if value is None:
+        return None
+
+    value = str(value).strip()
+
+    if (
+        len(value) >= 2
+        and value[0] == value[-1]
+        and value[0] in {'"', "'"}
+    ):
+        value = value[1:-1].strip()
+
+    return value
+
+
+def _get_saved_credential(
+    env_name,
+    prompt,
+    secret=False,
+    default=None
+):
+    """
+    Ordem:
+    1. variável de ambiente;
+    2. Gerenciador de Credenciais do Windows;
+    3. pergunta uma vez e salva.
+
+    Valores antigos com aspas são corrigidos automaticamente.
+    """
+
+    env_value = _clean_value(
+        os.getenv(env_name)
+    )
+
+    if env_value:
+        keyring.set_password(
+            SERVICE_NAME,
+            env_name,
+            env_value
+        )
+        return env_value
+
+    saved_value = _clean_value(
+        keyring.get_password(
+            SERVICE_NAME,
+            env_name
+        )
+    )
+
+    if saved_value:
+
+        # Regrava o valor já limpo caso a versão anterior
+        # estivesse salva com aspas.
+        keyring.set_password(
+            SERVICE_NAME,
+            env_name,
+            saved_value
+        )
+
+        return saved_value
+
+    label = (
+        f"{prompt} [{default}]: "
+        if default is not None
+        else f"{prompt}: "
+    )
+
+    if secret:
+        value = getpass(label)
+    else:
+        value = input(label)
+
+    value = _clean_value(value)
+
+    if not value and default is not None:
+        value = default
+
+    if not value:
+        raise ValueError(
+            f"{env_name} não pode ficar vazio."
+        )
+
+    keyring.set_password(
+        SERVICE_NAME,
+        env_name,
+        value
+    )
+
+    print(
+        f"{env_name} salvo com segurança neste computador."
+    )
+
+    return value
+
+
+client_id = _get_saved_credential(
+    "SPOTIPY_CLIENT_ID",
+    "Spotify Client ID"
+)
+
+client_secret = _get_saved_credential(
+    "SPOTIPY_CLIENT_SECRET",
+    "Spotify Client Secret",
+    secret=True
+)
+
+redirect_uri = _get_saved_credential(
+    "SPOTIPY_REDIRECT_URI",
+    "Spotify Redirect URI",
+    default="http://127.0.0.1:8888/callback"
+)
+
 
 sp = spotipy.Spotify(
     auth_manager=SpotifyOAuth(
         client_id=client_id,
         client_secret=client_secret,
         redirect_uri=redirect_uri,
-        scope="user-library-read user-library-modify"
+        scope=(
+            "user-library-read "
+            "user-library-modify"
+        ),
+        cache_path=str(
+            TOKEN_CACHE
+        ),
+        open_browser=True
     )
 )
 
-def spotify_call(func, *args, max_retries=5, **kwargs):
-    retries = 0
+
+def spotify_call(func, *args, **kwargs):
+    """
+    Executa chamadas à API do Spotify com retry simples
+    para erros temporários e rate limit.
+    """
 
     while True:
+
         try:
-            return func(*args, **kwargs)
+            return func(
+                *args,
+                **kwargs
+            )
 
         except SpotifyException as e:
 
-            # Rate limit
-            if e.http_status == 429 and retries < max_retries:
+            status = getattr(
+                e,
+                "http_status",
+                None
+            )
 
-                retry_after = int(
-                    e.headers.get("Retry-After", 5)
+            if status == 429:
+
+                retry_after = 5
+
+                headers = getattr(
+                    e,
+                    "headers",
+                    None
                 )
+
+                if headers:
+                    retry_after = int(
+                        headers.get(
+                            "Retry-After",
+                            retry_after
+                        )
+                    )
 
                 print(
-                    f"Rate limit atingido. Esperando {retry_after}s..."
+                    f"Rate limit. "
+                    f"Aguardando {retry_after}s..."
                 )
 
-                time.sleep(retry_after + 1)
+                time.sleep(
+                    retry_after
+                )
 
-                retries += 1
+                continue
+
+            if status in (
+                500,
+                502,
+                503,
+                504
+            ):
+
+                print(
+                    "Erro temporário do Spotify. "
+                    "Tentando novamente em 5s..."
+                )
+
+                time.sleep(5)
+
                 continue
 
             raise
 
-        except Exception as e:
-
-            if retries < max_retries:
-                retries += 1
-
-                print(
-                    f"Erro temporário: {e}"
-                )
-
-                time.sleep(2)
-
-                continue
-
-            raise
 
 def like_track(track_id):
 
@@ -69,12 +238,14 @@ def like_track(track_id):
 
     time.sleep(0.2)
 
-def add_album(album_id, selected_discs=None):
+
+def add_album(
+    album_id,
+    selected_discs=None
+):
 
     ids = []
     seen_tracks = set()
-    found_discs = set()
-
     offset = 0
 
     while True:
@@ -86,170 +257,158 @@ def add_album(album_id, selected_discs=None):
             offset=offset
         )
 
-        tracks = results.get("items", [])
+        tracks = results.get(
+            "items",
+            []
+        )
 
         if not tracks:
             break
 
-        # Ordena por disco e, dentro dele, pelo número da faixa.
-        tracks = sorted(
-            tracks,
-            key=lambda t: (
-                t.get("disc_number", 1),
-                t.get("track_number", 0)
+        for track in tracks:
+
+            disc_number = track.get(
+                "disc_number",
+                1
             )
-        )
 
-        for t in tracks:
-
-            disc_number = t.get("disc_number", 1)
-            found_discs.add(disc_number)
-
-            # Se a coluna DISCO estiver preenchida,
-            # ignora qualquer faixa que não pertença aos discos escolhidos.
             if (
                 selected_discs is not None
                 and disc_number not in selected_discs
             ):
                 continue
 
-            track_id = t.get("id")
+            track_id = track.get(
+                "id"
+            )
 
-            if not track_id:
+            if (
+                not track_id
+                or track_id in seen_tracks
+            ):
                 continue
 
-            if track_id in seen_tracks:
-                continue
+            seen_tracks.add(
+                track_id
+            )
 
-            seen_tracks.add(track_id)
-            ids.append(track_id)
+            ids.append(
+                (
+                    disc_number,
+                    track.get(
+                        "track_number",
+                        0
+                    ),
+                    track_id,
+                    track.get(
+                        "name",
+                        ""
+                    )
+                )
+            )
 
         if len(tracks) < 50:
             break
 
         offset += 50
 
-    # Mostra no terminal o que o código realmente interpretou.
-    print(
-        "Discos encontrados no Spotify:",
-        ", ".join(str(d) for d in sorted(found_discs))
-        if found_discs else "nenhum"
+    ids.sort(
+        key=lambda item: (
+            item[0],
+            item[1]
+        )
     )
 
     if selected_discs is None:
 
         print(
-            "DISCO na planilha: vazio -> adicionando todos os discos."
+            "Discos selecionados: todos"
         )
 
     else:
 
         print(
-            "DISCO na planilha:",
-            ", ".join(str(d) for d in sorted(selected_discs))
-        )
-
-        missing_discs = selected_discs - found_discs
-
-        if missing_discs:
-            print(
-                "AVISO: disco(s) solicitado(s) não encontrado(s): "
-                + ", ".join(
-                    str(d)
-                    for d in sorted(missing_discs)
+            "Discos selecionados:",
+            ", ".join(
+                str(disc)
+                for disc
+                in sorted(
+                    selected_discs
                 )
             )
-
-    if not ids:
-
-        print(
-            "Nenhuma faixa encontrada para o(s) disco(s) selecionado(s)."
         )
-        return
 
-    BATCH_SIZE = 5
+    print(
+        "Faixas que serão adicionadas:",
+        len(ids)
+    )
 
     for i in range(
         0,
         len(ids),
-        BATCH_SIZE
+        50
     ):
+
+        batch = [
+            item[2]
+            for item
+            in ids[i:i + 50]
+        ]
 
         spotify_call(
             sp.current_user_saved_tracks_add,
-            ids[i:i+BATCH_SIZE]
+            batch
         )
 
-    print(
-        f"Álbum adicionado ({len(ids)} músicas)"
-    )
+        time.sleep(0.2)
 
-    time.sleep(2)
 
 def delete_all_saved_tracks():
 
-    print("Apagando todas as músicas salvas do Spotify...")
-
-    all_ids = []
-    offset = 0
+    print(
+        "Apagando todas as músicas "
+        "salvas do Spotify..."
+    )
 
     while True:
 
         results = spotify_call(
             sp.current_user_saved_tracks,
-            limit=50,
-            offset=offset
+            limit=50
         )
 
-        items = results.get("items", [])
+        items = results.get(
+            "items",
+            []
+        )
 
         if not items:
             break
 
-        for item in items:
-
-            track = item.get("track")
-
-            if track and track.get("id"):
-                all_ids.append(
-                    track["id"]
-                )
-
-        offset += len(items)
-
-    if not all_ids:
-
-        print(
-            "Nenhuma música salva encontrada."
-        )
-
-        return
-
-    total = len(all_ids)
-
-    # usar 20 em vez de 50
-    BATCH_SIZE = 20
-
-    for i in range(
-        0,
-        total,
-        BATCH_SIZE
-    ):
-
-        batch = all_ids[
-            i:i+BATCH_SIZE
+        ids = [
+            item["track"]["id"]
+            for item
+            in items
+            if (
+                item.get("track")
+                and item["track"].get("id")
+            )
         ]
+
+        if not ids:
+            break
 
         spotify_call(
             sp.current_user_saved_tracks_delete,
-            batch
+            ids
         )
 
         print(
-            f"Removidas {min(i+BATCH_SIZE,total)}/{total}"
+            f"{len(ids)} música(s) removida(s)."
         )
 
-    print(
-        f"{total} músicas removidas com sucesso."
-    )
+        time.sleep(0.2)
 
+    print(
+        "Biblioteca de músicas curtidas apagada."
+    )

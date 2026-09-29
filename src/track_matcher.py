@@ -1,449 +1,281 @@
 import re
 
-from src.utils import (
-    similar,
-    split_artists,
-    match_year,
-    match_date,
-)
+from src.utils import similar, split_artists, match_year, match_date
+from src.spotify_client import sp, spotify_call
 
-from src.spotify_client import (
-    sp,
-    spotify_call,
-)
+
+VARIANT_PATTERNS = [
+    r"\bmix\b",
+    r"\bsingle\s*(?:ver(?:sion)?\.?)($|\s)",
+    r"\bclassic\b",
+    r"\bradio\s+edit\b",
+    r"\bextended(?:\s+mix|\s+version)?\b",
+    r"\bclub\s+(?:mix|version)\b",
+    r"\bkaraoke\b",
+    r"\binstrumental\b",
+    r"\bacoustic\b",
+    r"\blive\b",
+    r"\bao\s+vivo\b",
+    r"\bperformance\b",
+    r"\bsession\b",
+    r"\bcommentary\b",
+    r"\bsped\s+up\b",
+    r"\bslowed(?:\s+down)?\b",
+    r"\bnightcore\b",
+]
+
+CONTEXT_PATTERNS = [
+    r"\bvideo\b",
+    r"\bvideoclipe\b",
+    r"\bmusic\s+video\b",
+    r"\bofficial\s+(?:music\s+)?video\b",
+    r"\blive\b",
+    r"\bao\s+vivo\b",
+    r"\bkaraoke\b",
+    r"\binstrumental\b",
+    r"\bperformance\b",
+    r"\bsession\b",
+    r"\bcommentary\b",
+    r"\bacoustic\b",
+]
 
 
 def search_spotify(track, artist, allow_compilation=False, search_cache=None):
-
     if search_cache is None:
         search_cache = {}
 
     def execute_search(title):
-
-        query = (
-            f"track:{title} "
-            f"artist:{artist}"
-        ).lower().strip()
-
-        cache_key = (
-            f"{query}|allow_compilation="
-            f"{allow_compilation}"
-        )
+        query = f"track:{title} artist:{artist}".lower().strip()
+        cache_key = f"{query}|allow_compilation={allow_compilation}"
 
         if cache_key in search_cache:
             return search_cache[cache_key]
 
-        results = spotify_call(
-            sp.search,
-            q=query,
-            type="track",
-            limit=25
-        )
-
+        results = spotify_call(sp.search, q=query, type="track", limit=25)
         items = results["tracks"]["items"]
 
-        if allow_compilation:
-
-            filtered = items
-
-        else:
-
-            filtered = [
-                t
-                for t in items
-                if t["album"].get(
-                    "album_type",
-                    ""
-                ) != "compilation"
+        if not allow_compilation:
+            items = [
+                item
+                for item in items
+                if item.get("album", {}).get("album_type", "") != "compilation"
             ]
 
-        search_cache[cache_key] = filtered
+        search_cache[cache_key] = items
+        return items
 
-        return filtered
+    results = execute_search(track)
 
-    # 1. Primeiro tenta exatamente o título da planilha.
-    filtered = execute_search(track)
+    if results:
+        return results
 
-    if filtered:
-        return filtered
-
-    # 2. Se não encontrou, tenta remover complementos
-    # de trilha sonora, por exemplo:
-    #
+    # Fallback para títulos do tipo:
     # Double Life - From "Despicable Me 4"
-    # Double Life (From "Despicable Me 4")
-    # Double Life - From the Movie
-    #
-    # A busca simplificada só acontece quando a original falhou.
-
     simplified = re.sub(
         r"\s*[-–—]?\s*\(?\s*from\b.*$",
         "",
         str(track),
-        flags=re.IGNORECASE
+        flags=re.IGNORECASE,
     ).strip()
 
-    if (
-        simplified
-        and simplified.lower() != str(track).lower().strip()
-    ):
-
-        print(
-            f"Busca simplificada: "
-            f"'{track}' -> '{simplified}'"
-        )
-
+    if simplified and simplified.lower() != str(track).lower().strip():
+        print(f"Busca simplificada: '{track}' -> '{simplified}'")
         return execute_search(simplified)
 
-    return filtered
+    return results
+
+
+def _contains(text, pattern):
+    return bool(re.search(pattern, str(text), flags=re.IGNORECASE))
+
+
+def _has_unrequested_pattern(wanted_name, text, patterns):
+    return any(
+        _contains(text, pattern) and not _contains(wanted_name, pattern)
+        for pattern in patterns
+    )
+
+
+def _has_unrequested_variant(wanted_name, result_name):
+    if _has_unrequested_pattern(wanted_name, result_name, VARIANT_PATTERNS):
+        return True
+
+    # Bloqueia títulos com ano acrescentado, por exemplo "- 2024",
+    # quando esse ano não fazia parte do título pedido.
+    result_years = set(re.findall(r"\b(?:19|20)\d{2}\b", str(result_name)))
+    wanted_years = set(re.findall(r"\b(?:19|20)\d{2}\b", str(wanted_name)))
+
+    return bool(result_years - wanted_years)
+
 
 def score_result(row, result):
+    wanted_name = str(row["NOME"]).lower().strip()
+    track_name = str(result.get("name", "")).lower().strip()
 
-    score = 0
+    album = result.get("album", {})
+    album_name = str(album.get("name", "")).lower().strip()
 
-    track_name = (
-        result.get("name", "")
-        .lower()
-        .strip()
-    )
+    result_artists = [
+        artist.get("name", "")
+        for artist in result.get("artists", [])
+    ]
+    artist_names = " ".join(result_artists).lower()
+    combined = f"{track_name} {album_name} {artist_names}"
 
-    album_name = (
-        result.get("album", {})
-        .get("name", "")
-        .lower()
-        .strip()
-    )
-
-    artist_names = " ".join([
-        a["name"]
-        for a in result.get(
-            "artists",
-            []
-        )
-    ]).lower()
-
-    combined = (
-        track_name
-        + " "
-        + album_name
-        + " "
-        + artist_names
-    )
-
-    wanted_name = str(
-        row["NOME"]
-    ).lower().strip()
-
-    # ---------------------------------------------------------
-    # REMIX
-    # ---------------------------------------------------------
-    # Só aceita remix quando a própria planilha pede remix.
+    # Remix continua sendo tratado de forma simétrica.
     wanted_remix = "remix" in wanted_name
     result_is_remix = "remix" in combined
 
-    if result_is_remix and not wanted_remix:
-        return -1000
-
-    # Se a planilha pediu remix, evita escolher a versão normal.
-    if wanted_remix and not result_is_remix:
-        return -1000
-
-    # ---------------------------------------------------------
-    # REMASTER / REMASTERED
-    # ---------------------------------------------------------
-
-    wanted_remaster = (
-        "remaster" in wanted_name
-        or "remastered" in wanted_name
-    )
-
-    result_is_remaster = (
-        "remaster" in track_name
-        or "remastered" in track_name
-        or "remaster" in album_name
-        or "remastered" in album_name
-    )
-
-    if result_is_remaster and not wanted_remaster:
+    if result_is_remix != wanted_remix:
         return -200
 
-    if wanted_remaster and not result_is_remaster:
+    # Remaster é diferente: "Remastered" apenas no nome do álbum
+    # não elimina uma faixa normal.
+    wanted_remaster = "remaster" in wanted_name
+    track_is_remaster = "remaster" in track_name
+    album_is_remaster = "remaster" in album_name
+
+    if track_is_remaster and not wanted_remaster:
         return -200
 
-    blocked_terms = [
-        "video",
-        "videoclipe",
-        "music video",
-        "official video",
-        "official music video",
-        "live",
-        "ao vivo",
-        "karaoke",
-        "instrumental",
-        "performance",
-        "session",
-        "commentary",
-        "acoustic"
-    ]
+    if wanted_remaster and not (track_is_remaster or album_is_remaster):
+        return -200
 
-    if any(
-        term in combined
-        for term in blocked_terms
-    ):
-        return -1000
+    # Mix, Single ver., classic, karaoke etc. no título da faixa.
+    if _has_unrequested_variant(wanted_name, track_name):
+        return -200
 
-    # ---------------------------------------------------------
-    # NOME
-    # ---------------------------------------------------------
-    similarity = similar(
-        wanted_name,
-        track_name
-    )
+    # Preserva a proteção antiga contra versões ao vivo,
+    # acústicas, instrumentais etc. também no contexto do álbum.
+    if _has_unrequested_pattern(wanted_name, combined, CONTEXT_PATTERNS):
+        return -200
 
-    # Resultado extremamente diferente não deve disputar só por
-    # artista/data parecidos.
-    if similarity < 0.45:
-        return -1000
+    name_similarity = similar(wanted_name, track_name)
+
+    if name_similarity < 0.45:
+        return -200
+
+    score = name_similarity * 40
 
     if track_name == wanted_name:
         score += 60
 
-    score += similarity * 40
-
-    # Bônus específico quando a planilha realmente pediu remaster.
-    if wanted_remaster and result_is_remaster:
+    if wanted_remaster and (track_is_remaster or album_is_remaster):
         score += 35
 
-    # Bônus específico quando a planilha realmente pediu remix.
     if wanted_remix and result_is_remix:
         score += 25
 
-    # ---------------------------------------------------------
-    # ARTISTAS
-    # ---------------------------------------------------------
-    result_artists = [
-        a["name"]
-        for a in result.get(
-            "artists",
-            []
-        )
-    ]
+    sheet_artists = split_artists(row["ARTISTAS/GRUPO"])
+    main_sheet = sheet_artists[0] if sheet_artists else ""
+    main_result = result_artists[0] if result_artists else ""
 
-    sheet_artists = split_artists(
-        row["ARTISTAS/GRUPO"]
-    )
-
-    main_sheet = (
-        sheet_artists[0]
-        if sheet_artists
-        else ""
-    )
-
-    main_result = (
-        result_artists[0]
-        if result_artists
-        else ""
-    )
-
-    if similar(
-        main_sheet,
-        main_result
-    ) > 0.9:
-
+    if similar(main_sheet, main_result) > 0.9:
         score += 50
-
     elif any(
-        similar(sa, ra) > 0.8
-        for sa in sheet_artists
-        for ra in result_artists
+        similar(sheet_artist, result_artist) > 0.8
+        for sheet_artist in sheet_artists
+        for result_artist in result_artists
     ):
-
         score += 20
-
     else:
-        return -1000
+        return -200
 
-    # Explicit é apenas preferência secundária.
-    if result.get(
-        "explicit",
-        False
-    ):
+    # Explicit é preferência secundária.
+    if result.get("explicit", False):
         score += 10
 
-    # ---------------------------------------------------------
-    # DATA
-    # ---------------------------------------------------------
-    spotify_date = (
-        result.get("album", {})
-        .get("release_date", "")
-    )
+    spotify_date = album.get("release_date", "")
 
-    if match_date(
-        row["ESTREIA"],
-        spotify_date
-    ):
-
+    if match_date(row["ESTREIA"], spotify_date):
         score += 50
-
-    elif match_year(
-        row["ESTREIA"],
-        spotify_date
-    ):
-
+    elif match_year(row["ESTREIA"], spotify_date):
         score += 30
-
     else:
         score -= 50
 
-    # ---------------------------------------------------------
-    # TIPO DO LANÇAMENTO
-    # ---------------------------------------------------------
-    # A coluna TIPO da planilha identifica que esta linha é uma
-    # música/single, mas isso NÃO significa que a faixa correta
-    # precisa vir de um release do tipo "single".
-    #
-    # Quando a mesma gravação existe dentro de um álbum completo,
-    # a versão do álbum é preferível. Isso evita pegar capas de
-    # singles/EPs promocionais quando a música também faz parte
-    # do álbum do artista.
-    album_type = (
-        result.get("album", {})
-        .get("album_type", "")
-    )
+    # TIPO=Single na planilha significa "uma faixa",
+    # não "obrigatoriamente um release album_type=single".
+    album_type = album.get("album_type", "")
 
     if album_type == "album":
         score += 15
-
-    elif album_type == "single":
-        # Continua sendo um candidato válido. Só não recebe o
-        # bônus artificial que antes fazia singles/EPs vencerem.
-        score += 0
-
     elif album_type == "compilation":
         score -= 50
 
     return score
 
+
 def _same_track_identity(row, result):
-    """
-    Verifica se o resultado parece ser realmente a mesma música
-    antes de aplicar a preferência pela versão presente em álbum.
-    """
+    wanted_name = str(row["NOME"]).lower().strip()
+    result_name = str(result.get("name", "")).lower().strip()
 
-    wanted_name = str(
-        row["NOME"]
-    ).lower().strip()
-
-    result_name = str(
-        result.get("name", "")
-    ).lower().strip()
-
-    # Exigimos uma correspondência forte do título.
-    if similar(
-        wanted_name,
-        result_name
-    ) < 0.92:
+    if similar(wanted_name, result_name) < 0.92:
         return False
 
-    sheet_artists = split_artists(
-        row["ARTISTAS/GRUPO"]
-    )
-
+    sheet_artists = split_artists(row["ARTISTAS/GRUPO"])
     result_artists = [
-        a.get("name", "")
-        for a in result.get(
-            "artists",
-            []
-        )
+        artist.get("name", "")
+        for artist in result.get("artists", [])
     ]
 
     if not sheet_artists or not result_artists:
         return False
 
-    main_sheet = sheet_artists[0]
-    main_result = result_artists[0]
-
-    if similar(
-        main_sheet,
-        main_result
-    ) > 0.9:
+    if similar(sheet_artists[0], result_artists[0]) > 0.9:
         return True
 
     return any(
-        similar(sa, ra) > 0.8
-        for sa in sheet_artists
-        for ra in result_artists
+        similar(sheet_artist, result_artist) > 0.8
+        for sheet_artist in sheet_artists
+        for result_artist in result_artists
     )
 
 
 def choose_best(row, results):
-
     valid_results = []
 
-    for r in results:
+    for result in results:
+        score = score_result(row, result)
 
-        score = score_result(
-            row,
-            r
-        )
-
-        # -1000 significa que o candidato foi rejeitado por nome,
-        # artista, remix/remaster incompatível etc.
-        if score <= -1000:
-            continue
-
-        valid_results.append(
-            (r, score)
-        )
+        if score > -200:
+            valid_results.append((result, score))
 
     if not valid_results:
         return None, float("-inf")
 
-    # ---------------------------------------------------------
-    # PREFERÊNCIA POR FAIXA DO ÁLBUM
-    # ---------------------------------------------------------
-    # Se a mesma música, do mesmo artista, também aparece em um
-    # álbum completo, priorizamos essa ocorrência.
-    #
-    # Isso evita selecionar releases isolados que usam capas de
-    # single/EP quando a faixa faz parte do álbum oficial.
-    album_versions = [
+    wanted_name = str(row["NOME"]).lower().strip()
+
+    # Se existe título exatamente igual, versões aproximadas deixam
+    # de competir diretamente com ele.
+    exact_results = [
         (result, score)
         for result, score in valid_results
-        if (
-            result.get("album", {}).get(
-                "album_type",
-                ""
-            ) == "album"
-            and _same_track_identity(
-                row,
-                result
-            )
-        )
+        if str(result.get("name", "")).lower().strip() == wanted_name
+    ]
+
+    candidate_pool = exact_results or valid_results
+
+    if exact_results:
+        print("Correspondência exata de título encontrada.")
+
+    # Entre candidatos equivalentes, mantém a preferência pela
+    # ocorrência da música dentro de um álbum oficial.
+    album_versions = [
+        (result, score)
+        for result, score in candidate_pool
+        if result.get("album", {}).get("album_type", "") == "album"
+        and _same_track_identity(row, result)
     ]
 
     if album_versions:
-
-        best, best_score = max(
-            album_versions,
-            key=lambda item: item[1]
-        )
+        best, best_score = max(album_versions, key=lambda item: item[1])
 
         print(
-            "Preferindo versão presente no álbum:",
-            best.get("album", {}).get(
-                "name",
-                ""
-            )
+            "Preferindo ocorrência presente no álbum:",
+            best.get("album", {}).get("name", ""),
         )
 
         return best, best_score
 
-    # Se a música não existir em nenhum álbum compatível,
-    # usa normalmente o melhor single/release encontrado.
-    best, best_score = max(
-        valid_results,
-        key=lambda item: item[1]
-    )
-
-    return best, best_score
+    return max(candidate_pool, key=lambda item: item[1])

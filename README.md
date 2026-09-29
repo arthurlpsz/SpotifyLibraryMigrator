@@ -10,84 +10,157 @@ A proposta vai além de simplesmente pesquisar uma música pelo nome. O programa
 - Busca de músicas, singles, álbuns, EPs e compilações.
 - Comparação de resultados por nome, artista, data e tipo de lançamento.
 - Tratamento de versões remix e remastered.
-- Preferência pela faixa presente no álbum oficial quando a mesma música também existe como um release isolado.
+- Prioridade para correspondências exatas de título.
+- Rejeição de versões alternativas não solicitadas, como `Mix`, `Single ver.`, `classic`, karaoke, instrumental, live, acoustic e outras.
+- Preferência pela faixa presente em um álbum compatível quando a mesma música também existe como release isolado.
 - Tratamento de versões explicit/clean.
 - Suporte a compilações e `Various Artists`.
 - Seleção de discos específicos de um álbum.
 - Cache das buscas realizadas.
 - Registro de progresso para continuar execuções interrompidas.
+- Credenciais do Spotify armazenadas localmente de forma segura com `keyring`.
+- Cache do token OAuth fora da pasta do projeto.
 - Adição automática às Músicas Curtidas do Spotify.
+- Opção de remover as músicas curtidas atuais antes da importação.
 
 ## Estrutura do projeto
 
 ```text
-spotify-library-migrator/
+SpotifyLibraryMigrator/
 │
 ├── main.py
-├── utils.py
-├── spotify_client.py
-├── track_matcher.py
-├── album_matcher.py
-├── storage.py
 ├── Musicas_Curtidas.xlsx
-├── progress.json
-└── spotify_cache.json
+├── README.md
+├── .gitignore
+│
+├── src/
+│   ├── utils.py
+│   ├── spotify_client.py
+│   ├── track_matcher.py
+│   ├── album_matcher.py
+│   └── storage.py
+│
+└── debug/
+    ├── teste_single.py
+    └── teste_album.py
 ```
+
+Os arquivos `progress.json` e `spotify_cache.json` são criados durante o uso do programa e não precisam ser versionados no GitHub.
+
+## Organização dos módulos
 
 ### `main.py`
 
-É o coordenador do programa.
+É o coordenador principal do programa.
 
 Responsável por:
 
 - ler a planilha;
 - percorrer os registros;
-- decidir se a linha representa uma faixa ou coleção;
-- chamar os módulos de busca;
-- adicionar o resultado ao Spotify;
+- identificar se a linha representa uma faixa ou coleção;
+- chamar os módulos responsáveis pelas buscas;
+- adicionar o resultado escolhido à biblioteca;
 - controlar o progresso da execução.
 
-### `utils.py`
+### `src/utils.py`
 
 Contém funções auxiliares utilizadas por outros módulos, incluindo:
 
-- similaridade de textos;
+- comparação de similaridade entre textos;
 - separação de artistas;
 - comparação de datas e anos;
-- identificação de Single, Álbum e Compilação;
+- identificação de Single, Álbum, EP e Compilação;
 - interpretação da coluna `DISCO`.
 
-### `spotify_client.py`
+### `src/spotify_client.py`
 
-Centraliza a comunicação direta com a Spotify Web API:
+Centraliza a comunicação com a Spotify Web API:
 
 - autenticação OAuth;
-- chamadas à API com retry;
+- armazenamento das credenciais;
+- cache do token OAuth;
+- retry de chamadas temporariamente indisponíveis;
 - adição de músicas;
-- adição de álbuns;
+- adição das faixas de álbuns;
 - seleção de discos;
-- remoção das músicas salvas.
+- remoção das músicas curtidas.
 
-### `track_matcher.py`
+### `src/track_matcher.py`
 
-Responsável por encontrar a melhor versão de uma música.
+Responsável por localizar e selecionar a melhor ocorrência de uma música no Spotify.
 
 Analisa:
 
-- nome da faixa;
+- título da faixa;
 - artista;
 - data;
 - tipo do lançamento;
 - remix;
 - remaster;
 - explicit;
-- álbum associado à faixa.
+- álbum associado;
+- versões alternativas.
 
-Quando a mesma música está disponível como um single isolado e também dentro de um álbum compatível, o algoritmo dá preferência à **faixa do álbum**.
+O algoritmo prioriza títulos exatamente iguais ao nome informado na planilha e pode rejeitar resultados incompatíveis completamente.
 
-### `album_matcher.py`
+Exemplos de versões alternativas que podem ser rejeitadas quando não foram solicitadas:
 
-Responsável por álbuns, EPs e compilações.
+```text
+2023 Mix
+Single ver.
+classic
+Radio Edit
+Extended Mix
+Club Mix
+Karaoke
+Instrumental
+Acoustic
+Live
+Sped Up
+Slowed
+```
+
+Um detalhe importante é o tratamento de álbuns remasterizados. Uma faixa normal não é descartada apenas porque está dentro de um álbum cujo nome possui `(Remastered)`.
+
+Exemplo:
+
+```text
+Planilha:
+Mayonaka no Door~stay with me
+
+Spotify:
+Mayonaka no Door~stay with me
+Pocket Park (Remastered)
+
+Resultado:
+a faixa continua sendo considerada válida
+```
+
+### Faixa dentro de um álbum
+
+Quando existem múltiplas ocorrências compatíveis da mesma música, o projeto procura priorizar a faixa presente em um álbum oficial.
+
+Exemplo:
+
+```text
+Release isolado:
+Example Song
+
+Álbum:
+Official Album
+└── Example Song
+
+Resultado preferido:
+Official Album → Example Song
+```
+
+Isso não significa que todo resultado do tipo `album` será escolhido automaticamente.
+
+A correspondência ainda precisa ser compatível com o nome e o artista. Caso não exista uma ocorrência adequada em álbum, o release isolado continua sendo válido.
+
+### `src/album_matcher.py`
+
+Responsável pela busca e escolha de álbuns, EPs e compilações.
 
 Analisa:
 
@@ -95,21 +168,60 @@ Analisa:
 - artista;
 - data;
 - quantidade de faixas;
-- tipo do lançamento;
+- tipo de lançamento;
 - versões explicit/clean.
 
-Também possui tratamento específico para compilações cadastradas pelo Spotify como `Various Artists`.
+Compilações recebem tratamento especial porque o Spotify pode cadastrar o artista principal como:
 
-### `storage.py`
+```text
+Various Artists
+```
 
-Responsável pelos arquivos locais de apoio:
+### `src/storage.py`
+
+Responsável pelos arquivos locais utilizados pelo programa:
 
 ```text
 spotify_cache.json
 progress.json
 ```
 
-O cache evita buscas repetidas e o progresso permite continuar uma execução interrompida.
+O cache reduz chamadas repetidas à API e o arquivo de progresso permite continuar uma execução interrompida.
+
+## Arquivos de debug
+
+A pasta `debug/` contém programas auxiliares para testar os algoritmos sem executar a importação completa.
+
+### `debug/teste_single.py`
+
+Permite informar manualmente:
+
+- nome da música;
+- artista;
+- data.
+
+O programa exibe os resultados encontrados, seus scores e qual ocorrência seria escolhida pelo algoritmo.
+
+Execute com:
+
+```bash
+python debug/teste_single.py
+```
+
+### `debug/teste_album.py`
+
+Permite testar a busca de álbuns e EPs, incluindo:
+
+- score dos resultados;
+- quantidade de faixas;
+- versões explicit;
+- seleção de discos.
+
+Execute com:
+
+```bash
+python debug/teste_album.py
+```
 
 ## Estrutura da planilha
 
@@ -126,96 +238,165 @@ Principais colunas:
 | `NOME` | Nome da música, álbum, EP ou compilação |
 | `ARTISTAS/GRUPO` | Artista ou grupo |
 | `TIPO` | Single, Album, EP, Compilação etc. |
-| `ESTREIA` | Data usada para comparar o lançamento |
+| `ESTREIA` | Data usada na comparação com o Spotify |
 | `QTD` | Quantidade esperada de faixas |
 | `DISCO` | Disco ou discos que devem ser adicionados |
 
-Todas as abas são lidas, com exceção de uma aba chamada `Dashboard`.
+Todas as abas são lidas, com exceção da aba chamada `Dashboard`.
 
 ## Seleção de discos
 
-A coluna `DISCO` permite controlar álbuns com vários discos.
+A coluna `DISCO` permite selecionar partes específicas de lançamentos com múltiplos discos.
 
 | Valor | Comportamento |
 | --- | --- |
 | vazio | todos os discos |
-| `1` | somente disco 1 |
-| `2` | somente disco 2 |
+| `1` | somente o disco 1 |
+| `2` | somente o disco 2 |
 | `1,2` | discos 1 e 2 |
 | `1,2,4` | discos 1, 2 e 4 |
 
 É recomendado formatar essa coluna como **Texto** no Excel.
 
-## Correspondência de músicas
+## Instalação
 
-O Spotify pode possuir várias versões da mesma faixa:
+Recomendado:
 
-```text
-música original
-single promocional
-faixa do álbum
-remix
-remaster
-clean
-explicit
-compilação
-trilha sonora
+- Python 3.10 ou superior;
+- conta no Spotify;
+- aplicação criada no Spotify for Developers.
+
+Instale as dependências:
+
+```bash
+pip install pandas tqdm spotipy openpyxl keyring
 ```
 
-Por isso o programa atribui pontuações aos resultados em vez de simplesmente utilizar o primeiro item retornado pela API.
+## Configuração do Spotify
 
-Resultados incompatíveis podem ser rejeitados completamente.
+Antes da primeira execução, crie uma aplicação no Spotify for Developers.
 
-### Faixa dentro do álbum
-
-Quando uma música aparece tanto como release isolado quanto dentro de um álbum oficial compatível, o programa procura priorizar a ocorrência presente no álbum.
-
-Exemplo:
+No painel da aplicação, configure o Redirect URI:
 
 ```text
-Single:
-Example Song
-└── capa do single
-
-Álbum:
-Official Album
-└── Example Song
-
-Resultado preferido:
-Official Album → Example Song
+http://127.0.0.1:8888/callback
 ```
 
-Caso não exista uma versão compatível dentro de álbum, o single continua sendo utilizado normalmente.
+O endereço cadastrado no Spotify precisa ser igual ao utilizado pelo programa.
 
-## Remix e remaster
-
-O programa diferencia versões especiais da faixa.
-
-Se a planilha pede uma versão normal, resultados de remix/remaster incompatíveis podem ser descartados.
-
-Se a própria planilha pede um remix ou remaster, essas versões passam a ser consideradas normalmente pelo algoritmo.
-
-## Compilações
-
-Compilações recebem tratamento separado porque o Spotify frequentemente define o artista principal como:
+O projeto utiliza os seguintes escopos:
 
 ```text
-Various Artists
+user-library-read
+user-library-modify
 ```
 
-Nesses casos, a busca também pode ser realizada pelo nome da compilação sem exigir que o artista principal corresponda literalmente ao valor da planilha.
+## Primeira execução
+
+Execute:
+
+```bash
+python main.py
+```
+
+Caso as credenciais ainda não estejam salvas, o programa solicitará:
+
+```text
+Spotify Client ID:
+Spotify Client Secret:
+Spotify Redirect URI [http://127.0.0.1:8888/callback]:
+```
+
+Digite os valores **sem aspas**.
+
+Exemplo correto:
+
+```text
+Spotify Client ID: abc123
+```
+
+Evite:
+
+```text
+Spotify Client ID: "abc123"
+```
+
+O `Client Secret` não é exibido enquanto está sendo digitado.
+
+### Onde as credenciais são armazenadas?
+
+O projeto utiliza a biblioteca `keyring`.
+
+No Windows, as credenciais são armazenadas através do **Gerenciador de Credenciais do Windows**, em vez de serem gravadas diretamente no código-fonte.
+
+Depois da primeira configuração, normalmente não é necessário digitá-las novamente.
+
+Variáveis de ambiente continuam tendo prioridade caso estejam configuradas:
+
+```text
+SPOTIPY_CLIENT_ID
+SPOTIPY_CLIENT_SECRET
+SPOTIPY_REDIRECT_URI
+```
+
+### Token OAuth
+
+O token de autorização do Spotify é armazenado fora da pasta do projeto, no perfil do usuário:
+
+```text
+~/.spotify-library-migrator/
+```
+
+No Windows, isso corresponde a algo semelhante a:
+
+```text
+C:\Users\SEU_USUARIO\.spotify-library-migrator\
+```
+
+O Spotipy utiliza o refresh token para renovar a autorização quando necessário.
+
+Um novo login pode ser solicitado se, por exemplo:
+
+- o acesso do aplicativo for revogado no Spotify;
+- as credenciais da aplicação forem alteradas;
+- o cache OAuth for apagado;
+- o usuário trocar de computador ou perfil do sistema.
+
+## Execução
+
+Mantenha `Musicas_Curtidas.xlsx` na raiz do projeto e execute:
+
+```bash
+python main.py
+```
+
+Antes de iniciar a importação, o programa pergunta:
+
+```text
+Deseja apagar todas as músicas salvas antes de rodar o código? [s/n]:
+```
+
+Use:
+
+```text
+n
+```
+
+para preservar as músicas que já estão na biblioteca.
+
+> **Atenção:** escolher `s` remove as músicas atualmente salvas na biblioteca antes da importação.
 
 ## Cache
 
-As buscas são armazenadas em:
+As buscas realizadas são armazenadas em:
 
 ```text
 spotify_cache.json
 ```
 
-Isso reduz chamadas repetidas à API.
+Isso evita repetir várias chamadas à Spotify Web API.
 
-Caso você altere significativamente as regras de busca e queira testar tudo novamente, pode ser útil apagar o cache antes da execução.
+Quando as regras de busca forem alteradas significativamente, pode ser útil apagar esse arquivo para testar novamente os resultados com um cache limpo.
 
 ## Progresso
 
@@ -225,87 +406,43 @@ Os itens processados são armazenados em:
 progress.json
 ```
 
-O identificador também considera os discos selecionados.
+O identificador de progresso também considera os discos selecionados.
 
-Assim, duas entradas do mesmo álbum usando discos diferentes podem ser processadas separadamente.
+Dessa forma, o mesmo álbum pode aparecer mais de uma vez na planilha com seleções de discos diferentes.
 
-## Instalação
+## Segurança
 
-Recomendado:
+Nunca publique no GitHub:
 
-- Python 3.10+
-- conta no Spotify;
-- aplicação criada no Spotify for Developers.
+- Spotify Client Secret;
+- tokens OAuth;
+- arquivos contendo credenciais;
+- caches de autenticação.
 
-Instale as dependências:
-
-```bash
-pip install pandas tqdm spotipy openpyxl
-```
-
-## Configuração do Spotify
-
-Configure:
-
-```text
-SPOTIPY_CLIENT_ID
-SPOTIPY_CLIENT_SECRET
-SPOTIPY_REDIRECT_URI
-```
-
-Exemplo no PowerShell:
-
-```powershell
-$env:SPOTIPY_CLIENT_ID="seu_client_id"
-$env:SPOTIPY_CLIENT_SECRET="seu_client_secret"
-$env:SPOTIPY_REDIRECT_URI="https://127.0.0.1:8888/callback"
-```
-
-O código utiliza os escopos:
-
-```text
-user-library-read
-user-library-modify
-```
-
-Nunca publique seu `Client Secret` no GitHub.
-
-## Executando
-
-Mantenha a planilha na mesma pasta do projeto e execute:
-
-```bash
-python main.py
-```
-
-No início, o programa pergunta:
-
-```text
-Deseja apagar todas as músicas salvas antes de rodar o código? [s/n]:
-```
-
-Use `n` se deseja manter sua biblioteca atual.
-
-> Atenção: escolher `s` remove as músicas atualmente salvas antes da importação.
+As credenciais não ficam armazenadas diretamente no repositório.
 
 ## `.gitignore`
 
-É recomendado ignorar:
+Exemplo recomendado:
 
 ```gitignore
 spotify_cache.json
 progress.json
 .env
+.cache
+.spotify-library-migrator/
 __pycache__/
 *.pyc
 ```
 
-## Tecnologias
+## Tecnologias utilizadas
 
 - Python
 - Pandas
 - Spotipy
 - Spotify Web API
+- Keyring
+- OpenPyXL
 - Excel
 
 ## Próximas melhorias
@@ -313,7 +450,7 @@ __pycache__/
 Algumas possibilidades de evolução:
 
 - relatório das músicas que não foram encontradas;
-- auditoria de divergências entre datas da planilha e da API;
+- auditoria de divergências entre datas da planilha e Spotify;
 - revisão manual de correspondências duvidosas;
 - testes automatizados;
 - interface gráfica;

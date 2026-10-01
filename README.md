@@ -1,8 +1,8 @@
 # Spotify Library Migrator 🎵
 
-Projeto em Python para **migrar, reconstruir e organizar uma biblioteca musical no Spotify a partir de uma planilha Excel**, utilizando a Spotify Web API.
+Um projeto em Python para **migrar, reconstruir e organizar uma biblioteca musical no Spotify a partir de uma planilha Excel**, utilizando a Spotify Web API.
 
-A proposta vai além de simplesmente pesquisar uma música pelo nome. O programa tenta identificar a versão mais adequada considerando metadados como artista, data, tipo do lançamento, remix, remaster, explicit/clean, álbuns, compilações e discos específicos.
+O programa tenta identificar a versão mais adequada considerando metadados como artista, data, tipo do lançamento, remix, remaster, explicit/clean, álbuns, compilações e discos específicos.
 
 ## Principais funcionalidades
 

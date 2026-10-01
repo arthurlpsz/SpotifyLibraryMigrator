@@ -406,9 +406,7 @@ Os itens processados são armazenados em:
 progress.json
 ```
 
-O identificador de progresso também considera os discos selecionados.
-
-Dessa forma, o mesmo álbum pode aparecer mais de uma vez na planilha com seleções de discos diferentes.
+Se você parar a execução do script e retomar depois, esse arquivo é gerado e o código continua de onde parou. O identificador de progresso também considera os discos selecionados.
 
 ## Segurança
 
@@ -418,22 +416,6 @@ Nunca publique no GitHub:
 - tokens OAuth;
 - arquivos contendo credenciais;
 - caches de autenticação.
-
-As credenciais não ficam armazenadas diretamente no repositório.
-
-## `.gitignore`
-
-Exemplo recomendado:
-
-```gitignore
-spotify_cache.json
-progress.json
-.env
-.cache
-.spotify-library-migrator/
-__pycache__/
-*.pyc
-```
 
 ## Tecnologias utilizadas
 

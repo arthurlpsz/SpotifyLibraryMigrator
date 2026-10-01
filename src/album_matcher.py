@@ -226,27 +226,32 @@ def search_album(nome, artista, tipo="", album_search_cache=None):
     if album_search_cache is None:
         album_search_cache = {}
 
+    nome_texto = str(nome).strip()
+    artista_texto = str(artista).strip()
+    tipo_texto = str(tipo).strip()
+
     cache_key = (
-        f"{nome.lower().strip()}|"
-        f"{artista.lower().strip()}|"
-        f"{tipo.lower().strip()}"
+        f"{nome_texto.lower()}|"
+        f"{artista_texto.lower()}|"
+        f"{tipo_texto.lower()}"
     )
 
     if cache_key in album_search_cache:
         return album_search_cache[cache_key]
 
-    main_artist = split_artists(artista)[0]
-    user_wants_compilation = is_compilation(tipo)
+    artists = split_artists(artista_texto)
+    main_artist = artists[0] if artists else ""
+    user_wants_compilation = is_compilation(tipo_texto)
 
     queries = [
-        f"album:{nome} artist:{main_artist}"
+        f"album:{nome_texto} artist:{main_artist}"
     ]
 
     # Compilações frequentemente aparecem como "Various Artists".
     # Nesses casos também buscamos apenas pelo título.
     if user_wants_compilation:
         queries.append(
-            f"album:{nome}"
+            f"album:{nome_texto}"
         )
 
     try:
@@ -272,7 +277,9 @@ def search_album(nome, artista, tipo="", album_search_cache=None):
 
                 seen.add(album_id)
 
-                album_name = album["name"].lower()
+                album_name = str(
+                    album.get("name", "")
+                ).lower()
 
                 if any(
                     x in album_name
@@ -293,7 +300,7 @@ def search_album(nome, artista, tipo="", album_search_cache=None):
     except Exception as e:
 
         print(
-            f"Erro buscando álbum: {nome} - {artista}"
+            f"Erro buscando álbum: {nome_texto} - {artista_texto}"
         )
 
         print(e)

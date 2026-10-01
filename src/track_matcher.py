@@ -89,6 +89,39 @@ def _contains(text, pattern):
     return bool(re.search(pattern, str(text), flags=re.IGNORECASE))
 
 
+def _normalize_track_title(name):
+    """
+    Remove apenas complementos de participação usados como metadado
+    no fim do título.
+
+    Exemplos:
+        Under Pressure
+        Under Pressure (feat. David Bowie)
+
+    passam a ser comparados como o mesmo título principal.
+
+    Remix, Mix, Live, Remastered etc. NÃO são removidos aqui.
+    """
+
+    name = str(name).lower().strip()
+
+    feat_patterns = [
+        r"\s*[\(\[]\s*(?:feat\.?|ft\.?|featuring)\s+[^)\]]+[\)\]]\s*$",
+        r"\s*[-–—]\s*(?:feat\.?|ft\.?|featuring)\s+.+$",
+        r"\s+(?:feat\.?|ft\.?|featuring)\s+.+$",
+    ]
+
+    for pattern in feat_patterns:
+        name = re.sub(
+            pattern,
+            "",
+            name,
+            flags=re.IGNORECASE,
+        ).strip()
+
+    return name
+
+
 def _has_unrequested_pattern(wanted_name, text, patterns):
     return any(
         _contains(text, pattern) and not _contains(wanted_name, pattern)
@@ -127,7 +160,7 @@ def score_result(row, result):
     result_is_remix = "remix" in combined
 
     if result_is_remix != wanted_remix:
-        return -200
+        return -1000
 
     # Remaster é diferente: "Remastered" apenas no nome do álbum
     # não elimina uma faixa normal.
@@ -136,28 +169,34 @@ def score_result(row, result):
     album_is_remaster = "remaster" in album_name
 
     if track_is_remaster and not wanted_remaster:
-        return -200
+        return -1000
 
     if wanted_remaster and not (track_is_remaster or album_is_remaster):
-        return -200
+        return -1000
 
     # Mix, Single ver., classic, karaoke etc. no título da faixa.
     if _has_unrequested_variant(wanted_name, track_name):
-        return -200
+        return -1000
 
     # Preserva a proteção antiga contra versões ao vivo,
     # acústicas, instrumentais etc. também no contexto do álbum.
     if _has_unrequested_pattern(wanted_name, combined, CONTEXT_PATTERNS):
-        return -200
+        return -1000
 
-    name_similarity = similar(wanted_name, track_name)
+    normalized_wanted = _normalize_track_title(wanted_name)
+    normalized_track = _normalize_track_title(track_name)
+
+    name_similarity = similar(
+        normalized_wanted,
+        normalized_track,
+    )
 
     if name_similarity < 0.45:
-        return -200
+        return -1000
 
     score = name_similarity * 40
 
-    if track_name == wanted_name:
+    if normalized_track == normalized_wanted:
         score += 60
 
     if wanted_remaster and (track_is_remaster or album_is_remaster):
@@ -179,7 +218,7 @@ def score_result(row, result):
     ):
         score += 20
     else:
-        return -200
+        return -1000
 
     # Explicit é preferência secundária.
     if result.get("explicit", False):
@@ -207,8 +246,12 @@ def score_result(row, result):
 
 
 def _same_track_identity(row, result):
-    wanted_name = str(row["NOME"]).lower().strip()
-    result_name = str(result.get("name", "")).lower().strip()
+    wanted_name = _normalize_track_title(
+        row["NOME"]
+    )
+    result_name = _normalize_track_title(
+        result.get("name", "")
+    )
 
     if similar(wanted_name, result_name) < 0.92:
         return False
@@ -238,20 +281,24 @@ def choose_best(row, results):
     for result in results:
         score = score_result(row, result)
 
-        if score > -200:
+        if score > -1000:
             valid_results.append((result, score))
 
     if not valid_results:
         return None, float("-inf")
 
-    wanted_name = str(row["NOME"]).lower().strip()
+    wanted_name = _normalize_track_title(
+        row["NOME"]
+    )
 
-    # Se existe título exatamente igual, versões aproximadas deixam
-    # de competir diretamente com ele.
+    # "(feat. Artista)" no fim do nome é tratado como metadado.
+    # Outras versões (Mix, Live, Remix etc.) continuam diferentes.
     exact_results = [
         (result, score)
         for result, score in valid_results
-        if str(result.get("name", "")).lower().strip() == wanted_name
+        if _normalize_track_title(
+            result.get("name", "")
+        ) == wanted_name
     ]
 
     candidate_pool = exact_results or valid_results

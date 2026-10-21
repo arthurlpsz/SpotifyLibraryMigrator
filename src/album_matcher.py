@@ -1,15 +1,5 @@
-from src.utils import (
-    similar,
-    split_artists,
-    match_year,
-    match_date,
-    is_compilation,
-)
-
-from src.spotify_client import (
-    sp,
-    spotify_call,
-)
+from src.utils import similar,split_artists,match_year,match_date,is_compilation
+from src.spotify_client import sp, spotify_call
 
 
 def score_album_result(row, album):
@@ -22,8 +12,8 @@ def score_album_result(row, album):
 
     # Nome do álbum
     name_similarity = similar(
-        row["NOME"],
-        album["name"]
+        str(row["NOME"]),
+        str(album["name"])
     )
 
     if name_similarity > 0.8:
@@ -80,14 +70,14 @@ def score_album_result(row, album):
         album["release_date"]
     ):
 
-        score += 15
+        score += 25
 
     elif match_year(
         row["ESTREIA"],
         album["release_date"]
     ):
 
-        score += 10
+        score += 15
 
     # Tipo
     if album_type == "compilation":
@@ -120,20 +110,23 @@ def score_album_result(row, album):
             0
         )
 
-        difference = abs(
-            expected_tracks - spotify_tracks
-        )
+        try:
+            difference = abs(
+                expected_tracks - int(spotify_tracks)
+            )
+        except (TypeError, ValueError):
+            difference = None
 
         if difference == 0:
             score += 30
 
-        elif difference <= 2:
+        elif difference is not None and difference <= 2:
             score += 15
 
-        elif difference <= 5:
+        elif difference is not None and difference <= 5:
             score += 5
 
-        else:
+        elif difference is not None:
             score -= 5
 
     return score
@@ -319,9 +312,9 @@ def get_expected_track_count(row):
         if str(qtd).strip() == "":
             return None
 
-        return int(qtd)
+        return int(float(qtd))
 
-    except:
+    except (TypeError, ValueError):
 
         return None
 

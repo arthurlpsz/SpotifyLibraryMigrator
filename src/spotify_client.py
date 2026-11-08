@@ -143,6 +143,9 @@ redirect_uri = _get_saved_credential(
 
 
 sp = spotipy.Spotify(
+    requests_timeout=30,
+    retries=0,
+    status_retries=0,
     auth_manager=SpotifyOAuth(
         client_id=client_id,
         client_secret=client_secret,
@@ -160,73 +163,42 @@ sp = spotipy.Spotify(
 
 
 def spotify_call(func, *args, **kwargs):
-    """
-    Executa chamadas à API do Spotify com retry simples
-    para erros temporários e rate limit.
-    """
+    """Executa até seis tentativas, mostrando as esperas por erros temporários."""
 
-    while True:
-
+    for attempt in range(6):
         try:
-            return func(
-                *args,
-                **kwargs
-            )
+            return func(*args, **kwargs)
+        except SpotifyException as exc:
+            status = getattr(exc, "http_status", None)
+            if status not in (429, 500, 502, 503, 504):
+                raise
 
-        except SpotifyException as e:
+            if attempt == 5:
+                print("Limite de tentativas atingido. Operação interrompida.", flush=True)
+                raise
 
-            status = getattr(
-                e,
-                "http_status",
-                None
-            )
-
+            delay = min(5 * (2 ** attempt), 60)
             if status == 429:
+                headers = getattr(exc, "headers", None) or {}
+                try:
+                    retry_after = float(headers.get("Retry-After", 0))
+                    if retry_after > delay:
+                        delay = retry_after
+                except (TypeError, ValueError):
+                    pass
 
-                retry_after = 5
-
-                headers = getattr(
-                    e,
-                    "headers",
-                    None
-                )
-
-                if headers:
-                    retry_after = int(
-                        headers.get(
-                            "Retry-After",
-                            retry_after
-                        )
-                    )
-
-                print(
-                    f"Rate limit. "
-                    f"Aguardando {retry_after}s..."
-                )
-
-                time.sleep(
-                    retry_after
-                )
-
-                continue
-
-            if status in (
-                500,
-                502,
-                503,
-                504
-            ):
-
-                print(
-                    "Erro temporário do Spotify. "
-                    "Tentando novamente em 5s..."
-                )
-
-                time.sleep(5)
-
-                continue
-
-            raise
+            reason = "Limite de requisições" if status == 429 else "Erro temporário"
+            print(
+                f"{reason}. Aguardando {delay:g}s antes da tentativa {attempt + 2}/6...",
+                flush=True
+            )
+            remaining = delay
+            while remaining > 0:
+                interval = min(remaining, 30)
+                time.sleep(interval)
+                remaining -= interval
+                if remaining > 0:
+                    print(f"Aguardando Spotify: faltam {remaining:g}s.", flush=True)
 
 
 def like_track(track_id):
@@ -346,13 +318,13 @@ def add_album(
     for i in range(
         0,
         len(ids),
-        50
+        40
     ):
 
         batch = [
             item[2]
             for item
-            in ids[i:i + 50]
+            in ids[i:i + 40]
         ]
 
         spotify_call(
@@ -364,54 +336,48 @@ def add_album(
 
 
 def delete_all_saved_tracks():
-
-    print(
-        "Apagando todas as músicas "
-        "salvas do Spotify..."
-    )
+    print("Apagando todas as músicas salvas do Spotify...", flush=True)
+    removed = 0
+    previous_ids = None
+    repeated_pages = 0
 
     while True:
-
+        print(f"Consultando músicas restantes ({removed} remoções enviadas)...", flush=True)
+        # A biblioteca encolhe a cada exclusão: sempre consultar a primeira página.
         results = spotify_call(
             sp.current_user_saved_tracks,
-            limit=50
+            limit=40,
+            offset=0
         )
-
-        items = results.get(
-            "items",
-            []
-        )
-
+        items = results.get("items", [])
         if not items:
             break
 
         ids = [
             item["track"]["id"]
-            for item
-            in items
-            if (
-                item.get("track")
-                and item["track"].get("id")
-            )
+            for item in items
+            if item.get("track") and item["track"].get("id")
         ]
-
         if not ids:
-            break
+            raise RuntimeError(
+                "Há itens salvos sem ID válido. A exclusão não foi concluída."
+            )
 
-    for inicio in range(0, len(ids), 50):
-        lote = ids[inicio:inicio + 50]
+        current_ids = tuple(ids)
+        repeated_pages = repeated_pages + 1 if current_ids == previous_ids else 0
+        if repeated_pages >= 3:
+            raise RuntimeError(
+                "O Spotify continua retornando as mesmas músicas após a exclusão. "
+                "Operação interrompida para evitar um ciclo de requisições."
+            )
+        previous_ids = current_ids
 
-        spotify_call(
-            sp.current_user_saved_tracks_delete,
-            lote
-        )
+        for start in range(0, len(ids), 40):
+            batch = ids[start:start + 40]
+            print(f"Removendo lote de {len(batch)} música(s)...", flush=True)
+            spotify_call(sp.current_user_saved_tracks_delete, batch)
+            removed += len(batch)
+            print(f"Remoções enviadas com sucesso: {removed}.", flush=True)
+            time.sleep(1)
 
-        print(
-            f"{len(ids)} música(s) removida(s)."
-        )
-
-        time.sleep(0.2)
-
-    print(
-        "Biblioteca de músicas curtidas apagada."
-    )
+    print("Biblioteca de músicas curtidas apagada.", flush=True)

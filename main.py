@@ -1,5 +1,7 @@
 import atexit
 
+from src.execution_history import row_record, load_snapshot, compare_rows, save_execution
+
 import pandas as pd
 from tqdm import tqdm
 
@@ -107,6 +109,8 @@ def load_all_sheets(file):
             subset=["NOME", "ARTISTAS/GRUPO"]
         )
 
+        df["__aba"] = sheet
+        df["__linha"] = df.index + 2
         dfs.append(df)
 
     return pd.concat(
@@ -201,67 +205,97 @@ def add_result_to_library(row, result):
 
 
 def main():
+    df = load_all_sheets(EXCEL_FILE)
+    previous = load_snapshot()
+    records = [row_record(row) for _, row in df.iterrows()]
+    added, removed, changed, matched = compare_rows(
+        previous["rows"] if previous else [], records
+    )
+    if previous:
+        print(
+            f"Desde a última execução: {len(added)} linha(s) nova(s), "
+            f"{len(changed)} alterada(s), {len(removed)} removida(s)."
+        )
+    else:
+        print("Primeira comparação: esta execução criará a referência inicial.")
 
-    if ask_delete_all_tracks():
+    deleted = ask_delete_all_tracks()
+    if deleted:
         delete_all_saved_tracks()
 
-    df = load_all_sheets(
-        EXCEL_FILE
-    )
+    review_all = input(
+        "Pesquisar novamente os itens já importados para conferir mudanças no Spotify? [s/n]: "
+    ).strip().lower() in ("s", "sim")
 
-    processed = load_progress()
-
-    atexit.register(
-        lambda: save_progress(
-            processed
-        )
-    )
-
-    atexit.register(
-        save_cache
-    )
-
-    pbar = tqdm(
-        total=len(df),
-        initial=len(processed)
-    )
+    processed = set() if deleted else load_progress()
+    # Resultados antigos de busca não devem esconder mudanças ou novos lançamentos.
+    search_cache.clear()
+    album_search_cache.clear()
+    old_by_record = {id(new): old for old, new in matched}
+    for old, new in matched:
+        if old.get("last_search"):
+            new["last_search"] = old["last_search"]
+        new["imported"] = old.get("imported", False) and not deleted
+    atexit.register(lambda: save_progress(processed))
+    atexit.register(save_cache)
+    pbar = tqdm(total=len(df))
+    completed = False
 
     try:
-
-        for _, row in df.iterrows():
-
-            unique_id = build_progress_id(row)
-
-            if unique_id in processed:
-
-                pbar.update(1)
-
-                continue
-
+        for (_, row), record in zip(df.iterrows(), records):
+            old = old_by_record.get(id(record))
+            if old and old.get("last_search"):
+                record["last_search"] = old["last_search"]
             try:
+                unique_id = build_progress_id(row)
+                # Só pula linhas iguais com sucesso conhecido. Falhas são reavaliadas.
+                if (
+                    not review_all and old
+                    and old.get("last_search", {}).get("status") == "encontrado"
+                    and unique_id in processed and record.get("imported")
+                ):
+                    record["status"] = "mantido"
+                    record["result"] = old["last_search"].get("result")
+                    continue
 
                 result = process_row(row)
+                record["checked"] = True
+                record["status"] = "encontrado" if result else "nao_encontrado"
+                record["result"] = list(result) if result else None
+                record["last_search"] = {
+                    "status": record["status"], "result": record["result"]
+                }
 
-                add_result_to_library(row, result)
+                if result:
+                    already_added = (
+                        old and unique_id in processed and record.get("imported")
+                        and old.get("last_search", {}).get("result") == list(result)
+                    )
+                    if not already_added:
+                        add_result_to_library(row, result)
+                    record["imported"] = True
+                    processed.add(unique_id)
+                else:
+                    record["imported"] = False
+                    processed.discard(unique_id)
 
-                processed.add(unique_id)
-
-                if len(processed) % 100 == 0:
-                    save_progress(processed)
-
-            except Exception as e:
-                print("Erro:", e)
-
-            pbar.set_description(f"{row['NOME']}")
-
-            pbar.update(1)
-
+                save_progress(processed)
+            except Exception as exc:
+                record["status"] = "erro"
+                record["error"] = str(exc)
+                print("Erro:", exc)
+            finally:
+                pbar.set_description(str(row["NOME"]))
+                pbar.update(1)
+        completed = True
     except KeyboardInterrupt:
-        print("\nInterrupção detectada.")
-
+        print("\\nInterrupção detectada.")
     finally:
         save_progress(processed)
+        save_cache()
+        save_execution(records, previous, completed)
         pbar.close()
+
 
 if __name__ == "__main__":
     main()

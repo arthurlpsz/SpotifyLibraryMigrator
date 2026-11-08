@@ -2,3 +2,4 @@ spotipy
 pandas
 tqdm
 openpyxl
+keyring

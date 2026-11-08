@@ -398,9 +398,12 @@ def delete_all_saved_tracks():
         if not ids:
             break
 
+    for inicio in range(0, len(ids), 50):
+        lote = ids[inicio:inicio + 50]
+
         spotify_call(
             sp.current_user_saved_tracks_delete,
-            ids
+            lote
         )
 
         print(

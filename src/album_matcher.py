@@ -175,6 +175,12 @@ def choose_best_album(row, results):
 
     best_score = max(score for _, score in scored)
 
+    # Evita aceitar um álbum apenas por ser o melhor entre candidatos ruins.
+    # O fallback por título só deve ser considerado se houver evidência mínima
+    # de correspondência de nome e artista/tipo/data.
+    if best_score < 40:
+        return None
+
     tied = [
         album
         for album, score in scored

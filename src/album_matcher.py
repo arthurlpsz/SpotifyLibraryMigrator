@@ -234,71 +234,43 @@ def search_album(nome, artista, tipo="", album_search_cache=None):
 
     artists = split_artists(artista_texto)
     main_artist = artists[0] if artists else ""
-    user_wants_compilation = is_compilation(tipo_texto)
 
+    # A consulta por título é uma alternativa também para álbuns e EPs:
+    # o Spotify pode indexar o artista com uma grafia ou crédito diferente.
     queries = [
-        f"album:{nome_texto} artist:{main_artist}"
+        f"album:{nome_texto} artist:{main_artist}",
+        f"album:{nome_texto}",
     ]
 
-    # Compilações frequentemente aparecem como "Various Artists".
-    # Nesses casos também buscamos apenas pelo título.
-    if user_wants_compilation:
-        queries.append(
-            f"album:{nome_texto}"
+    albums = []
+    seen = set()
+
+    for query in queries:
+        results = spotify_call(
+            sp.search,
+            q=query,
+            type="album",
+            limit=20
         )
 
-    try:
+        for album in results.get("albums", {}).get("items", []):
+            album_id = album.get("id")
+            if not album_id or album_id in seen:
+                continue
 
-        albums = []
-        seen = set()
+            seen.add(album_id)
+            album_name = str(album.get("name", "")).lower()
 
-        for query in queries:
+            if any(
+                term in album_name
+                for term in ("karaoke", "instrumental", "commentary")
+            ):
+                continue
 
-            results = spotify_call(
-                sp.search,
-                q=query,
-                type="album",
-                limit=20
-            )
+            albums.append(album)
 
-            for album in results["albums"]["items"]:
-
-                album_id = album["id"]
-
-                if album_id in seen:
-                    continue
-
-                seen.add(album_id)
-
-                album_name = str(
-                    album.get("name", "")
-                ).lower()
-
-                if any(
-                    x in album_name
-                    for x in [
-                        "karaoke",
-                        "instrumental",
-                        "commentary"
-                    ]
-                ):
-                    continue
-
-                albums.append(album)
-
-        album_search_cache[cache_key] = albums
-
-        return albums
-
-    except Exception as e:
-
-        print(
-            f"Erro buscando álbum: {nome_texto} - {artista_texto}"
-        )
-
-        print(e)
-
-        return []
+    album_search_cache[cache_key] = albums
+    return albums
 
 def get_expected_track_count(row):
 

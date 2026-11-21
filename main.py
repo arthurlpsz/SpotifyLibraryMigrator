@@ -7,7 +7,7 @@ from tqdm import tqdm
 
 from src.utils import (is_collection, is_compilation, parse_discs)
 from src.spotify_client import (like_track, add_album, delete_all_saved_tracks)
-from src.track_matcher import (search_spotify, choose_best)
+from src.track_matcher import (search_spotify, search_spotify_fallback, choose_best)
 from src.album_matcher import (search_album, choose_best_album)
 
 from src.storage import (search_cache, album_search_cache, load_progress, save_progress, save_cache)
@@ -40,15 +40,17 @@ def process_row(row):
             album_search_cache=album_search_cache
         )
 
-        if results:
+        best = choose_best_album(row, results)
 
-            best = choose_best_album(
-                row,
-                results
-            )
+        if not best:
+            print(f"Nova tentativa de busca do álbum: {row['NOME']}")
+            # search_album reúne a consulta por artista e a consulta
+            # alternativa apenas pelo título; reavaliamos o conjunto completo.
+            if results:
+                best = choose_best_album(row, results)
 
-            if best:
-                return ("album",best["id"])
+        if best:
+            return ("album", best["id"])
 
         print(f"ALBUM NÃO ENCONTRADO: {row['NOME']}")
 
@@ -57,6 +59,23 @@ def process_row(row):
     results = search_spotify(row["NOME"], row["ARTISTAS/GRUPO"], allow_compilation=False, search_cache=search_cache)
 
     best, best_score = choose_best(row, results)
+
+    if not best:
+        print(f"Nova tentativa de busca da faixa: {row['NOME']}")
+        fallback_results = search_spotify_fallback(
+            row["NOME"],
+            allow_compilation=False,
+            search_cache=search_cache
+        )
+        # Junta por ID para não pontuar duas vezes o mesmo item.
+        merged = {item.get("id"): item for item in results if item.get("id")}
+        merged.update({
+            item.get("id"): item
+            for item in fallback_results
+            if item.get("id")
+        })
+        results = list(merged.values())
+        best, best_score = choose_best(row, results)
 
     print(
         row["NOME"],

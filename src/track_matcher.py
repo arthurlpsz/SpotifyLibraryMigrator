@@ -265,3 +265,48 @@ def choose_best(row, results):
     # nesse contexto, Single significa uma faixa individual, não o tipo
     # de lançamento do Spotify.
     return max(candidate_pool, key=lambda item: item[1])
+
+
+
+def search_spotify_fallback(track, allow_compilation=False, search_cache=None):
+    """
+    Busca alternativa pelo título, sem o operador de artista.
+    Os resultados continuam sujeitos aos mesmos critérios de choose_best().
+    """
+    if search_cache is None:
+        search_cache = {}
+
+    track_text = str(track).strip()
+    simplified = re.sub(
+        r"\s*[-–—]?\s*\(?\s*from\b.*$", "",
+        track_text, flags=re.IGNORECASE,
+    ).strip()
+
+    titles = [track_text]
+    if simplified and simplified.casefold() != track_text.casefold():
+        titles.append(simplified)
+
+    items = []
+    seen = set()
+    for title in titles:
+        query = f"track:{title}".lower().strip()
+        cache_key = f"fallback|{query}|allow_compilation={allow_compilation}"
+        if cache_key in search_cache:
+            found = search_cache[cache_key]
+        else:
+            response = spotify_call(sp.search, q=query, type="track", limit=25)
+            found = response.get("tracks", {}).get("items", [])
+            if not allow_compilation:
+                found = [
+                    item for item in found
+                    if item.get("album", {}).get("album_type", "") != "compilation"
+                ]
+            search_cache[cache_key] = found
+
+        for item in found:
+            track_id = item.get("id")
+            if track_id and track_id not in seen:
+                seen.add(track_id)
+                items.append(item)
+
+    return items

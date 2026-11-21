@@ -8,7 +8,7 @@ from tqdm import tqdm
 from src.utils import (is_collection, is_compilation, parse_discs)
 from src.spotify_client import (like_track, add_album, delete_all_saved_tracks)
 from src.track_matcher import (search_spotify, search_spotify_fallback, choose_best)
-from src.album_matcher import (search_album, choose_best_album)
+from src.album_matcher import (search_album, search_album_fallback, choose_best_album)
 
 from src.storage import (search_cache, album_search_cache, load_progress, save_progress, save_cache)
 
@@ -44,10 +44,21 @@ def process_row(row):
 
         if not best:
             print(f"Nova tentativa de busca do álbum: {row['NOME']}")
-            # search_album reúne a consulta por artista e a consulta
-            # alternativa apenas pelo título; reavaliamos o conjunto completo.
-            if results:
-                best = choose_best_album(row, results)
+            fallback_results = search_album_fallback(
+                row["NOME"],
+                album_search_cache=album_search_cache
+            )
+            merged = {
+                album.get("id"): album
+                for album in results
+                if album.get("id")
+            }
+            merged.update({
+                album.get("id"): album
+                for album in fallback_results
+                if album.get("id")
+            })
+            best = choose_best_album(row, list(merged.values()))
 
         if best:
             return ("album", best["id"])

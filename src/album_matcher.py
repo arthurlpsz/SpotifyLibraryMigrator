@@ -214,61 +214,63 @@ def choose_best_album(row, results):
         key=lambda album: explicit_info[album["id"]][0]
     )
 
-def search_album(nome, artista, tipo="", album_search_cache=None):
+def _collect_albums(query):
+    results = spotify_call(
+        sp.search,
+        q=query,
+        type="album",
+        limit=20
+    )
+    albums = []
+    for album in results.get("albums", {}).get("items", []):
+        album_id = album.get("id")
+        if not album_id:
+            continue
+        album_name = str(album.get("name", "")).lower()
+        if any(
+            term in album_name
+            for term in ("karaoke", "instrumental", "commentary")
+        ):
+            continue
+        albums.append(album)
+    return albums
 
+
+def search_album(nome, artista, tipo="", album_search_cache=None):
     if album_search_cache is None:
         album_search_cache = {}
 
     nome_texto = str(nome).strip()
     artista_texto = str(artista).strip()
     tipo_texto = str(tipo).strip()
-
-    cache_key = (
-        f"{nome_texto.lower()}|"
-        f"{artista_texto.lower()}|"
-        f"{tipo_texto.lower()}"
-    )
-
-    if cache_key in album_search_cache:
-        return album_search_cache[cache_key]
-
     artists = split_artists(artista_texto)
     main_artist = artists[0] if artists else ""
 
-    # A consulta por título é uma alternativa também para álbuns e EPs:
-    # o Spotify pode indexar o artista com uma grafia ou crédito diferente.
-    queries = [
-        f"album:{nome_texto} artist:{main_artist}",
-        f"album:{nome_texto}",
-    ]
+    cache_key = (
+        f"{nome_texto.lower()}|{artista_texto.lower()}|{tipo_texto.lower()}"
+    )
+    if cache_key in album_search_cache:
+        return album_search_cache[cache_key]
 
-    albums = []
-    seen = set()
+    # Primeira tentativa: título e artista principal.
+    albums = _collect_albums(
+        f"album:{nome_texto} artist:{main_artist}"
+    )
+    album_search_cache[cache_key] = albums
+    return albums
 
-    for query in queries:
-        results = spotify_call(
-            sp.search,
-            q=query,
-            type="album",
-            limit=20
-        )
 
-        for album in results.get("albums", {}).get("items", []):
-            album_id = album.get("id")
-            if not album_id or album_id in seen:
-                continue
+def search_album_fallback(nome, album_search_cache=None):
+    """Segunda tentativa: pesquisa apenas pelo título, com cache separado."""
+    if album_search_cache is None:
+        album_search_cache = {}
 
-            seen.add(album_id)
-            album_name = str(album.get("name", "")).lower()
+    nome_texto = str(nome).strip()
+    cache_key = f"fallback|album:{nome_texto.lower()}"
+    if cache_key in album_search_cache:
+        return album_search_cache[cache_key]
 
-            if any(
-                term in album_name
-                for term in ("karaoke", "instrumental", "commentary")
-            ):
-                continue
-
-            albums.append(album)
-
+    albums = _collect_albums(f"album:{nome_texto}")
     album_search_cache[cache_key] = albums
     return albums
 

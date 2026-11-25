@@ -1,0 +1,72 @@
+Execução: 2026-11-08T14:37:51.905910-03:00
+Situação: concluída
+Comparação: 2026-11-08T14:12:57.219919-03:00
+Não encontrado significa ausência de correspondência pelo algoritmo; não comprova remoção pelo artista.
+
+Linhas adicionadas (0)
+Nenhum.
+
+Linhas removidas da planilha (0)
+Nenhum.
+
+Linhas alteradas (1)
+Green Day — American Idiot (20th Anniversary Deluxe Edition) [aba < 2008, linha 172]: TIPO: 'Single' -> 'Álbum'
+
+Lançamentos não encontrados nesta execução (48)
+Earth, Wind & Fire — September [aba < 2008, linha 23]
+Rita Lee, Roberto De Carvalho — Rita Lee [aba < 2008, linha 24]
+Backstreet Boys — Backstreet's Back (European Version) [aba < 2008, linha 84]
+Destiny's Child — The Writing's On The Wall [aba < 2008, linha 100]
+Capital Inicial, Kiko Zambianchini — Primeiros Erros (Chove) - Ao Vivo [aba < 2008, linha 107]
+Charlie Brown Jr., Negra Li — Não É Sério [aba < 2008, linha 115]
+Destiny's Child — Survivor [aba < 2008, linha 122]
+Beyoncé — B'Day Deluxe Edition [aba < 2008, linha 218]
+Jordin Sparks — Jordin Sparks [aba < 2008, linha 231]
+Selena Gomez — Tell Me Something I Don't Know [aba < 2008, linha 244]
+Victor & Leo — Borboletas [aba < 2008, linha 245]
+Maroon 5, Christina Aguilera — Moves Like Jagger [aba 2009-2015, linha 34]
+Sérgio Mendes, Gracinha Leporace — Mas Que Nada - 2011 Rio Version [aba 2009-2015, linha 47]
+Charlie Brown Jr. — Céu Azul [aba 2009-2015, linha 79]
+Munhoz & Mariano — Camaro Amarelo [aba 2009-2015, linha 84]
+Alicia Keys — Girl On Fire [aba 2009-2015, linha 99]
+T-Pain, B.o.B — Up Down (Do This All Day) [aba 2009-2015, linha 124]
+Enrique Inglesias, Descemer Bueno, Gente De Zona — Bailando - Spanish Version [aba 2009-2015, linha 142]
+Ty Dolla $ign, The Weeknd, Wiz Khalifa, Mustard — Or Nah - Remix [aba 2009-2015, linha 151]
+Nico & Vinz — Am I Wrong [aba 2009-2015, linha 153]
+Maluma — Borro Cassete [aba 2009-2015, linha 226]
+Maiara & Maraisa — Medo Bobo - Ao Vivo [aba 2016-2019, linha 7]
+Gustavo Mioto — Impressionando Os Anjos [aba 2016-2019, linha 33]
+Simone & Simaria — Regime Fechado - Ao Vivo [aba 2016-2019, linha 38]
+Simone & Simaria, Anitta — Loka [aba 2016-2019, linha 47]
+Matheus & Kauan — Te Assumi Pro Brasil - Ao Vivo [aba 2016-2019, linha 62]
+Tyler, The Creator, Kali Uchis — See You Again [aba 2016-2019, linha 94]
+Chase Atlantic — Chase Atlantic [aba 2016-2019, linha 107]
+Matheus & Kauan, Anitta — Ao Vivo E A Cores [aba 2016-2019, linha 143]
+LUDMILLA, Mc Doguinha, MC Pupio — Din Din Din [aba 2016-2019, linha 151]
+Matheus & Kauan, Jorge & Matheus — Quarta Cadeira - Ao Vivo [aba 2016-2019, linha 222]
+Sia, Diplo, Labrinth — LABRINTH, SIA & DIPLO PRESENT...LSD [aba 2016-2019, linha 228]
+Tiago Iorc — Laços [aba 2016-2019, linha 233]
+Post Malone — Hollywood's Bleeding [aba 2016-2019, linha 272]
+Alok, Illkay Sencan, Tove Lo — Don't Say Goodbye [aba 2020-2023, linha 43]
+ROSÉ — R [aba 2020-2023, linha 67]
+Enrique Inglesias — SUBEME LA RADIO [aba 2020-2023, linha 95]
+Alemeda — Gonna Bleach My Eyebrowns [aba 2020-2023, linha 96]
+Alec Benjamin — (Un)Commentary [aba 2020-2023, linha 134]
+Doja Cat — Vegas [aba 2020-2023, linha 141]
+Ava Max — Diamonds And Dancefloors [aba 2020-2023, linha 189]
+casso, RAYE, D-BLOCK Europe — Prada [aba 2020-2023, linha 243]
+Pineapple StormTv, N.I.N.A, AJULLIACOSTA, Mac Júlia, BUDAH, Maru2D, Sodomita, Mc Luanna, Attlanta — Poetisas no Topo 3 [aba 2024-2025, linha 12]
+Ryu, The Runner, AJULLIACOSTA, Duquesa — Eles Me Odeiam [aba 2024-2025, linha 72]
+Tasha & Tracie, retroboy — Amina [aba 2024-2025, linha 170]
+A$AP Rocky — Don't Be Dumb [aba 2026, linha 2]
+CA7RIEL & Paco Amoroso, PinkPantheress, Fred again..., Etienne de Crécy, Grand Theft Auto VI — Sexy Magic (from GTAVI: The Album) [aba 2026, linha 49]
+Justice, Tame Impala, SZA, Grande Theft Auto VI, King Gizzard & The Lizard Wizard — Flower In A Hurricane [aba 2026, linha 55]
+
+Resultados de busca alterados em linhas iguais (0)
+Nenhum.
+
+Erros (0)
+Nenhum.
+
+Itens sem nova consulta nesta execução (0)
+Nenhum.

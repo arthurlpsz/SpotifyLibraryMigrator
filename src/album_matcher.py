@@ -162,23 +162,51 @@ def count_explicit_tracks(album_id):
 
     return explicit_count, total
 
-def choose_best_album(row, results):
+def choose_best_album(row, results, debug=False):
 
     if not results:
+        if debug:
+            print("Nenhum álbum retornado pelo Spotify.")
+
         return None
 
     scored = []
+
+    if debug:
+        print("\nCandidatos de álbuns encontrados:")
 
     for album in results:
         score = score_album_result(row, album)
         scored.append((album, score))
 
+        if debug:
+            artists = ", ".join(
+                artist.get("name", "")
+                for artist in album.get("artists", [])
+            )
+
+            status = (
+                "APROVADO"
+                if score >= 40
+                else "REJEITADO: pontuação abaixo de 40"
+            )
+
+            print(
+                f"- {album.get('name')} "
+                f"| {artists} "
+                f"| Score: {score} "
+                f"| {status}"
+            )
+
     best_score = max(score for _, score in scored)
 
-    # Evita aceitar um álbum apenas por ser o melhor entre candidatos ruins.
-    # O fallback por título só deve ser considerado se houver evidência mínima
-    # de correspondência de nome e artista/tipo/data.
     if best_score < 40:
+        if debug:
+            print(
+                f"Nenhum álbum atingiu a pontuação mínima. "
+                f"Melhor pontuação: {best_score}."
+            )
+
         return None
 
     tied = [
@@ -187,34 +215,37 @@ def choose_best_album(row, results):
         if score == best_score
     ]
 
-    # Sem empate: não faz chamadas extras à API.
     if len(tied) == 1:
+        if debug:
+            print(
+                f"Melhor álbum selecionado: {tied[0]['name']} "
+                f"(score: {best_score})"
+            )
+
         return tied[0]
 
-    print(
-        f"Empate entre {len(tied)} álbuns. "
-        "Verificando versões explicit..."
-    )
+    if debug:
+        print(
+            f"Empate entre {len(tied)} álbuns. "
+            "Verificando versões explicit..."
+        )
 
     explicit_info = {}
 
     for album in tied:
-        explicit_count, total = count_explicit_tracks(
-            album["id"]
-        )
+        explicit_count, total = count_explicit_tracks(album["id"])
 
         explicit_info[album["id"]] = (
             explicit_count,
             total
         )
 
-        print(
-            f"{album['name']} [{album['id']}] "
-            f"-> {explicit_count}/{total} explicit"
-        )
+        if debug:
+            print(
+                f"{album['name']} "
+                f"-> {explicit_count}/{total} explicit"
+            )
 
-    # Prefere mais faixas explicit.
-    # Persistindo empate, mantém o primeiro resultado.
     return max(
         tied,
         key=lambda album: explicit_info[album["id"]][0]

@@ -1,5 +1,8 @@
-spotify_cache.json
-progress.json
 .env
 __pycache__/
 *.pyc
+
+# Arquivos gerados durante a execução
+progress.json
+spotify_cache.json
+historico_execucoes/

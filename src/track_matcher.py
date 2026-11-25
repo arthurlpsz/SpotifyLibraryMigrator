@@ -40,7 +40,7 @@ CONTEXT_PATTERNS = [
 ]
 
 
-def search_spotify(track, artist, allow_compilation=False, search_cache=None):
+def search_spotify(track, artist, allow_compilation=False, search_cache=None, debug=False):
     if search_cache is None:
         search_cache = {}
 
@@ -72,7 +72,8 @@ def search_spotify(track, artist, allow_compilation=False, search_cache=None):
         flags=re.IGNORECASE,
     ).strip()
     if simplified and simplified.lower() != track_text.lower():
-        print(f"Busca simplificada: '{track_text}' -> '{simplified}'")
+        if debug:
+            print(f"Busca simplificada: '{track_text}' -> '{simplified}'")
         return execute_search(simplified)
     return results
 
@@ -236,36 +237,65 @@ def _same_track_identity(row, result):
     ) > 0.8
 
 
-def choose_best(row, results):
+def choose_best(row, results, debug=False):
     valid_results = []
+
+    if debug:
+        print("\nCandidatos encontrados:")
+
     for result in results:
         score = score_result(row, result)
+
+        if debug:
+            artists = ", ".join(_artist_names(result.get("artists", [])))
+
+            status = (
+                "APROVADO"
+                if score > -1000
+                else "REJEITADO pelos critérios de correspondência"
+            )
+
+            print(
+                f"- {result.get('name', 'Sem título')} "
+                f"| {artists} "
+                f"| Score: {score} "
+                f"| {status}"
+            )
+
         if score > -1000:
             valid_results.append((result, score))
 
     if not valid_results:
+        if debug:
+            print("Nenhum candidato foi aprovado.")
+
         return None, float("-inf")
 
     wanted_name = _normalize_track_title(row.get("NOME", ""))
+
     exact_results = [
-        (result, score) for result, score in valid_results
+        (result, score)
+        for result, score in valid_results
         if _normalize_track_title(result.get("name", "")) == wanted_name
     ]
+
     candidate_pool = exact_results or valid_results
-    if exact_results:
+
+    if exact_results and debug:
         print("Correspondência exata de título normalizado encontrada.")
 
-    # A identidade é decidida nesta ordem:
-    # 1. título normalizado (quando há correspondência exata);
-    # 2. compatibilidade dos artistas, já validada e pontuada em score_result;
-    # 3. data como bônus, nunca como filtro;
-    # 4. pequenas preferências de lançamento, sem sobrepor título/artistas.
-    #
-    # Não forçamos album_type="single" quando TIPO=Single na planilha:
-    # nesse contexto, Single significa uma faixa individual, não o tipo
-    # de lançamento do Spotify.
-    return max(candidate_pool, key=lambda item: item[1])
+    best, best_score = max(
+        candidate_pool,
+        key=lambda item: item[1]
+    )
 
+    if debug:
+        print(
+            f"Melhor candidato: {best.get('name')} "
+            f"(score: {best_score})"
+        )
+
+    return best, best_score
 
 
 def search_spotify_fallback(track, allow_compilation=False, search_cache=None):

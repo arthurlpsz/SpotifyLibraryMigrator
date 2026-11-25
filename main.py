@@ -1,4 +1,6 @@
 import atexit
+from spotipy.exceptions import SpotifyException
+from requests.exceptions import RequestException
 
 from src.execution_history import row_record, load_snapshot, compare_rows, save_execution
 
@@ -14,24 +16,24 @@ from src.storage import (search_cache, album_search_cache, load_progress, save_p
 
 
 EXCEL_FILE = "Musicas_Curtidas.xlsx"
+# False: execução normal.
+# True: mostra detalhes das buscas e dos candidatos.
+DEBUG_SEARCH = False
 
 
-def process_row(row):
+def process_row(row, debug=False):
     """
     Decide se a linha representa uma faixa ou uma coleção
-    (álbum, EP ou compilação) e procura a melhor correspondência.
+    e procura a melhor correspondência no Spotify.
     """
 
-    tipo = str(
-        row.get("TIPO", "")
-    ).lower()
+    tipo = str(row.get("TIPO", "")).lower()
+
+    # =========================
+    # ÁLBUNS, EPS E COMPILAÇÕES
+    # =========================
 
     if is_collection(tipo):
-
-        if is_compilation(tipo):
-            print(
-                f"BUSCANDO COMPILAÇÃO: {row['NOME']}"
-            )
 
         results = search_album(
             row["NOME"],
@@ -40,85 +42,108 @@ def process_row(row):
             album_search_cache=album_search_cache
         )
 
-        best = choose_best_album(row, results)
+        if debug:
+            print(f"\n[DIAGNÓSTICO] Álbum: {row['NOME']}")
+            print(f"Busca original: {len(results)} resultado(s)")
+
+        best = choose_best_album(row, results, debug=debug)
 
         if not best:
-            print(f"Nova tentativa de busca do álbum: {row['NOME']}")
+            if debug:
+                print("Executando busca alternativa pelo título...")
+
             fallback_results = search_album_fallback(
                 row["NOME"],
                 album_search_cache=album_search_cache
             )
+
+            if debug:
+                print(
+                    f"Busca alternativa: "
+                    f"{len(fallback_results)} resultado(s)"
+                )
+
             merged = {
                 album.get("id"): album
                 for album in results
                 if album.get("id")
             }
+
             merged.update({
                 album.get("id"): album
                 for album in fallback_results
                 if album.get("id")
             })
-            best = choose_best_album(row, list(merged.values()))
+
+            best = choose_best_album(
+                row,
+                list(merged.values()),
+                debug=debug
+            )
 
         if best:
             return ("album", best["id"])
 
-        print(f"ALBUM NÃO ENCONTRADO: {row['NOME']}")
-
         return None
 
-    results = search_spotify(row["NOME"], row["ARTISTAS/GRUPO"], allow_compilation=False, search_cache=search_cache)
+    # =========================
+    # MÚSICAS
+    # =========================
 
-    best, best_score = choose_best(row, results)
+    results = search_spotify(
+        row["NOME"],
+        row["ARTISTAS/GRUPO"],
+        allow_compilation=False,
+        search_cache=search_cache,
+        debug=debug
+    )
+
+    if debug:
+        print(f"\n[DIAGNÓSTICO] Música: {row['NOME']}")
+        print(f"Busca original: {len(results)} resultado(s)")
+
+    best, best_score = choose_best(
+        row,
+        results,
+        debug=debug
+    )
 
     if not best:
-        print(f"Nova tentativa de busca da faixa: {row['NOME']}")
+
+        if debug:
+            print("Executando busca alternativa pelo título...")
+
         fallback_results = search_spotify_fallback(
             row["NOME"],
             allow_compilation=False,
             search_cache=search_cache
         )
-        # Junta por ID para não pontuar duas vezes o mesmo item.
-        merged = {item.get("id"): item for item in results if item.get("id")}
+
+        if debug:
+            print(
+                f"Busca alternativa: "
+                f"{len(fallback_results)} resultado(s)"
+            )
+
+        merged = {
+            item.get("id"): item
+            for item in results
+            if item.get("id")
+        }
+
         merged.update({
             item.get("id"): item
             for item in fallback_results
             if item.get("id")
         })
-        results = list(merged.values())
-        best, best_score = choose_best(row, results)
 
-    print(
-        row["NOME"],
-        "->",
-        "ACHOU" if best else "NAO ACHOU",
-        f"(score={best_score})"
-    )
+        best, best_score = choose_best(
+            row,
+            list(merged.values()),
+            debug=debug
+        )
 
-    if not best:
-        return None
-
-    print(
-        "Selecionado:",
-        best.get("name", ""),
-        "-",
-        ", ".join(
-            artist.get("name", "")
-            for artist in best.get("artists", [])
-        ),
-        "|",
-        best.get("album", {}).get("name", ""),
-        "|",
-        best.get("album", {}).get("release_date", ""),
-        "|",
-        best.get("album", {}).get("album_type", "")
-    )
-
-    return (
-        "track",
-        best["id"]
-    )
-
+    return ("track", best["id"]) if best else None
 
 def load_all_sheets(file):
     """
@@ -271,6 +296,15 @@ def main():
     pbar = tqdm(total=len(df))
     completed = False
 
+    stats = {
+        "musicas": 0,
+        "albuns": 0,
+        "nao_encontrados": 0,
+        "erros_api": 0,
+        "outros_erros": 0,
+        "mantidos": 0
+    }
+
     try:
         for (_, row), record in zip(df.iterrows(), records):
             old = old_by_record.get(id(record))
@@ -288,7 +322,7 @@ def main():
                     record["result"] = old["last_search"].get("result")
                     continue
 
-                result = process_row(row)
+                result = process_row(row, debug=DEBUG_SEARCH)
                 record["checked"] = True
                 record["status"] = "encontrado" if result else "nao_encontrado"
                 record["result"] = list(result) if result else None
@@ -301,19 +335,45 @@ def main():
                         old and unique_id in processed and record.get("imported")
                         and old.get("last_search", {}).get("result") == list(result)
                     )
+
                     if not already_added:
                         add_result_to_library(row, result)
+
+                        if result[0] == "track":
+                            stats["musicas"] += 1
+                            print(f"[+] Música adicionada: {row['NOME']}")
+
+                        elif result[0] == "album":
+                            stats["albuns"] += 1
+                            print(f"[+] Álbum adicionado: {row['NOME']}")
+
+                    else:
+                        stats["mantidos"] += 1
+
                     record["imported"] = True
                     processed.add(unique_id)
+
                 else:
+                    stats["nao_encontrados"] += 1
                     record["imported"] = False
                     processed.discard(unique_id)
 
+                    print(f"[!] Não encontrado: {row['NOME']}")
+
                 save_progress(processed)
+            except (SpotifyException, RequestException) as exc:
+                record["status"] = "erro_api"
+                record["error"] = str(exc)
+                stats["erros_api"] += 1
+
+                print(f"[ERRO API] {row['NOME']}: {exc}")
+
             except Exception as exc:
                 record["status"] = "erro"
                 record["error"] = str(exc)
-                print("Erro:", exc)
+                stats["outros_erros"] += 1
+
+                print(f"[ERRO] {row['NOME']}: {exc}")
             finally:
                 pbar.set_description(str(row["NOME"]))
                 pbar.update(1)
@@ -325,6 +385,14 @@ def main():
         save_cache()
         save_execution(records, previous, completed)
         pbar.close()
+        print("\n========== RESUMO DA EXECUÇÃO ==========")
+        print(f"Músicas adicionadas: {stats['musicas']}")
+        print(f"Álbuns adicionados: {stats['albuns']}")
+        print(f"Itens já importados: {stats['mantidos']}")
+        print(f"Não encontrados: {stats['nao_encontrados']}")
+        print(f"Erros na API: {stats['erros_api']}")
+        print(f"Outros erros: {stats['outros_erros']}")
+        print("========================================")
 
 
 if __name__ == "__main__":
